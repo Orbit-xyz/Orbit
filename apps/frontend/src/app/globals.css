@@ -294,12 +294,20 @@
 }
 
 .hero-title {
-  margin: 24px 0 22px;
-  font-size: clamp(3.2rem, 6.8vw, 6.4rem);
+  margin: 0 0 24px;
+  font-size: clamp(2.1rem, 4.2vw, 3.6rem);
   font-weight: 700;
-  line-height: 0.92;
-  letter-spacing: -0.08em;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
   color: var(--black);
+}
+
+@media (max-width: 640px) {
+  .hero-title {
+    font-size: clamp(1.85rem, 8.5vw, 2.4rem);
+    line-height: 1.14;
+    letter-spacing: -0.03em;
+  }
 }
 
 .hero-title span {

@@ -16,14 +16,10 @@ export function Hero() {
           transition={{ duration: 0.6, ease: "easeOut" }}
           className="hero-copy"
         >
-          <div className="eyebrow">
-            NON-CUSTODIAL PULL PAYMENTS FOR BUSINESSES
-          </div>
-
           <h1 className="hero-title">
-            Let revenue{" "}
+            Non-custodial programmable payment protocol for{" "}
             <Typewriter
-              words={["pull itself.", "settle itself.", "automate itself."]}
+              words={["businesses.", "organizations.", "developers."]}
             />
           </h1>
 
