@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment Variables (Security)
+.env
+.env.*
+!.env.example
+*.pem
+
+# Build Outputs (Next.js & Node)
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+
+# Rust / Soroban
+target/
+
+# Foundry / EVM
+cache/
+broadcast/
+.cache/
+
+# Backups & Temporary Directories
+_backup/
+scratch-test/
+
+# Editor / OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+*.swp

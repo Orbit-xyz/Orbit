@@ -1,0 +1,62 @@
+import Link from "next/link";
+import { Brand } from "./brand";
+
+export function Footer() {
+  return (
+    <footer className="site-footer">
+      <div className="orbit-container">
+        <div className="footer-top">
+          <div>
+            <Brand />
+            <p className="footer-brand-copy">
+              Non-custodial pull payments for businesses that sell, subscribe,
+              and pay globally.
+            </p>
+          </div>
+          <div className="footer-columns">
+            <div className="footer-column">
+              <h3>Product</h3>
+              <Link href="/#features">Allowance Vault</Link>
+              <Link href="/#features">Batch Payroll</Link>
+              <Link href="/#features">Stellar Testnet</Link>
+              <Link href="/pricing">Pricing Plans</Link>
+            </div>
+            <div className="footer-column">
+              <h3>Resources</h3>
+              <Link href="/docs">Documentation</Link>
+              <Link href="/docs">API Reference</Link>
+              <Link href="/get-started">Testnet Playground</Link>
+              <Link href="/docs">SDK Quickstart</Link>
+            </div>
+            <div className="footer-column">
+              <h3>Company</h3>
+              <Link href="/docs">About Orbit</Link>
+              <Link href="/docs">Brand Guidelines</Link>
+              <Link href="/docs">Release Notes</Link>
+              <a
+                href="https://stellar.org"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Stellar Network ↗
+              </a>
+            </div>
+            <div className="footer-column">
+              <h3>Legal</h3>
+              <Link href="/docs">Privacy Policy</Link>
+              <Link href="/docs">Terms of Service</Link>
+              <Link href="/docs">Security Disclosures</Link>
+            </div>
+          </div>
+        </div>
+
+        <div className="footer-bottom">
+          <span>© Orbit Technologies 2026. All rights reserved.</span>
+          <span className="mono">
+            STABLECOIN PAYMENTS / SOROBAN / STELLAR TESTNET
+          </span>
+        </div>
+      </div>
+    </footer>
+  );
+}
