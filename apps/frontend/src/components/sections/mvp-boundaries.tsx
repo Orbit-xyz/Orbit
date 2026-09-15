@@ -12,7 +12,6 @@ export function MvpBoundaries() {
           viewport={{ once: true, margin: "-60px" }}
           transition={{ duration: 0.5 }}
         >
-          <span className="eyebrow">MVP, BY DESIGN</span>
           <h2 className="section-title">
             Small enough to ship. Clear enough to trust.
           </h2>
@@ -26,7 +25,7 @@ export function MvpBoundaries() {
           className="boundary-list"
         >
           <div>
-            <span className="text-white font-semibold">01 / IN SCOPE (MVP)</span>
+            <span className="text-white font-semibold">IN SCOPE (MVP)</span>
             <p>
               Allowance Vault smart contracts on Soroban, Batch Disbursement to
               multiple wallets, developer SDK, responsive checkout widget, and
@@ -34,7 +33,7 @@ export function MvpBoundaries() {
             </p>
           </div>
           <div>
-            <span className="text-white/60">02 / OUT OF SCOPE (ROADMAP)</span>
+            <span className="text-white/60">OUT OF SCOPE (ROADMAP)</span>
             <p>
               Autonomous cron bots, real-time path payment asset swapping (XLM to
               USDC), fiat credit-card on/off-ramps, and heavy enterprise

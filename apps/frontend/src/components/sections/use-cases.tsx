@@ -52,7 +52,6 @@ export function UseCases() {
           className="split-heading"
         >
           <div>
-            <span className="eyebrow">WHO ORBIT IS FOR</span>
             <h2 className="section-title">One protocol. Five ways to get paid.</h2>
           </div>
           <p className="section-body">

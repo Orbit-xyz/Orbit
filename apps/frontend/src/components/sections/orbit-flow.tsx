@@ -32,7 +32,6 @@ export function OrbitFlow() {
           className="steps-heading"
         >
           <div>
-            <span className="eyebrow">THE ORBIT FLOW</span>
             <h2 className="section-title">A safer way to move on-chain money.</h2>
           </div>
           <p className="section-body">
@@ -44,16 +43,13 @@ export function OrbitFlow() {
         <div className="steps-list">
           {STEPS.map((step, idx) => (
             <motion.div
-              key={step.num}
+              key={step.title}
               initial={{ opacity: 0, y: 30 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: "-50px" }}
               transition={{ duration: 0.5, delay: idx * 0.15 }}
               className="step group hover:bg-white/[0.02] transition-colors"
             >
-              <span className="step-number mono group-hover:text-white transition-colors">
-                {step.num}
-              </span>
               <h3>{step.title}</h3>
               <p>{step.body}</p>
             </motion.div>

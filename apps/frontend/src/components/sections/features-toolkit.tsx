@@ -45,7 +45,6 @@ export function FeaturesToolkit() {
           className="split-heading"
         >
           <div>
-            <span className="eyebrow">THE MVP TOOLKIT</span>
             <h2 className="section-title">
               The payment primitives businesses keep asking for.
             </h2>
@@ -59,14 +58,13 @@ export function FeaturesToolkit() {
         <div className="feature-grid">
           {FEATURES.map((feat, idx) => (
             <motion.article
-              key={feat.index}
+              key={feat.title}
               initial={{ opacity: 0, scale: 0.98 }}
               whileInView={{ opacity: 1, scale: 1 }}
               viewport={{ once: true, margin: "-50px" }}
               transition={{ duration: 0.4, delay: idx * 0.1 }}
               className="feature-card"
             >
-              <span className="feature-index">{feat.index}</span>
               <h3>{feat.title}</h3>
               <p>{feat.description}</p>
               <div className="feature-foot">{feat.foot}</div>

@@ -4,7 +4,6 @@ export default function SignInPage() {
   return (
     <main className="interstitial">
       <div className="orbit-container interstitial-inner">
-        <span className="eyebrow">MERCHANT ACCESS / COMING SOON</span>
         <h1>
           The control room is <span>still orbiting.</span>
         </h1>
@@ -33,7 +32,6 @@ export default function SignInPage() {
         </div>
 
         <div className="placeholder-panel">
-          <span className="mono">NO AUTHENTICATION REQUIRED YET</span>
           <p>
             No account or wallet connection is required for this demo. The
             current release is focused on proving the protocol primitives and

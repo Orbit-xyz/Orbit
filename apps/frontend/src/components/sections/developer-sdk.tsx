@@ -47,7 +47,6 @@ export function DeveloperSdk() {
           viewport={{ once: true, margin: "-60px" }}
           transition={{ duration: 0.5 }}
         >
-          <span className="eyebrow">FOR DEVELOPERS</span>
           <h2 className="section-title">
             Keep your product moving. Let the protocol handle the pull.
           </h2>

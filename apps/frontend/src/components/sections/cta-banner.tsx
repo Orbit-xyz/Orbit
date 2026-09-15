@@ -14,7 +14,6 @@ export function CtaBanner() {
           transition={{ duration: 0.5 }}
           className="cta-card"
         >
-          <span className="eyebrow">THE NEXT CLEAR MOVE</span>
           <h2>Build revenue flows that do not need a nudge.</h2>
           <p>
             Inspect the on-chain Allowance Vault, test batch payroll on Stellar

@@ -4,7 +4,6 @@ export default function NotFound() {
   return (
     <main className="interstitial">
       <div className="orbit-container interstitial-inner">
-        <span className="eyebrow">404 / NOT FOUND</span>
         <h1>
           Orbit out of <span>range.</span>
         </h1>

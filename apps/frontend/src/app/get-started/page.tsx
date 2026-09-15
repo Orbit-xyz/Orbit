@@ -4,7 +4,6 @@ export default function GetStartedPage() {
   return (
     <main className="interstitial">
       <div className="orbit-container interstitial-inner">
-        <span className="eyebrow">START WITH TESTNET</span>
         <h1>
           Make the next payment <span>automatic.</span>
         </h1>
@@ -32,7 +31,6 @@ export default function GetStartedPage() {
         </div>
 
         <div className="placeholder-panel">
-          <span className="mono">THE ON-CHAIN HANDSHAKE</span>
           <p>
             Customer approves a protected Allowance Vault. Merchant triggers the
             pull when due. The Soroban smart contract transfers exact USDC. Zero

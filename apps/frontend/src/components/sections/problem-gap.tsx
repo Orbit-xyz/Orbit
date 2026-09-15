@@ -14,7 +14,6 @@ export function ProblemGap() {
           className="split-heading"
         >
           <div>
-            <span className="eyebrow">THE PROBLEM</span>
             <h2 className="section-title">
               Web3 wallets can push money. Businesses need to pull it.
             </h2>
@@ -35,10 +34,6 @@ export function ProblemGap() {
             transition={{ duration: 0.5, delay: 0.1 }}
             className="compare-col"
           >
-            <div className="compare-label">
-              <span>PUSH-ONLY WALLETS</span>
-              <span className="mono">01 / FRICTION</span>
-            </div>
             <h3>Every payment starts with a reminder.</h3>
             <p>
               Manual transfers, copy-pasted addresses, high churn, failed
@@ -54,10 +49,6 @@ export function ProblemGap() {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="compare-col"
           >
-            <div className="compare-label">
-              <span className="text-white font-semibold">ORBIT PROTOCOL</span>
-              <span className="mono text-white">02 / AUTOMATION</span>
-            </div>
             <h3>Approve once. Execute within the rules.</h3>
             <p>
               The Allowance Vault smart contract strictly enforces time windows and

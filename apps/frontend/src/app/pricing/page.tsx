@@ -49,7 +49,6 @@ export default function PricingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
           >
-            <span className="eyebrow">PRICING / MVP ACCESS</span>
             <h1>
               Pay for the <span>rails.</span>
               <br />
@@ -72,7 +71,6 @@ export default function PricingPage() {
             transition={{ duration: 0.5, delay: 0.1 }}
             className="pricing-card"
           >
-            <span className="eyebrow">MVP PLAYGROUND</span>
             <h2>Testnet access</h2>
             <div className="price">
               <strong>Free</strong>
@@ -120,7 +118,6 @@ export default function PricingPage() {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="pricing-card scale"
           >
-            <span className="eyebrow">FOR BUILDERS</span>
             <h2>Protocol access</h2>
             <div className="price">
               <strong>Talk</strong>
@@ -163,7 +160,6 @@ export default function PricingPage() {
       <section className="pricing-faq">
         <div className="orbit-container faq-grid">
           <div>
-            <span className="eyebrow">FAQ</span>
             <h2 className="section-title">The short version.</h2>
           </div>
 

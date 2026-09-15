@@ -4,7 +4,6 @@ export default function DocsPage() {
   return (
     <main className="interstitial">
       <div className="orbit-container interstitial-inner">
-        <span className="eyebrow">DEVELOPERS / PROTOCOL SPEC</span>
         <h1>
           Build the pull, <span>not the paperwork.</span>
         </h1>
@@ -33,7 +32,6 @@ export default function DocsPage() {
         </div>
 
         <div className="placeholder-panel">
-          <span className="mono">DOCUMENTATION / MVP SPEC OVERVIEW</span>
           <p>
             Allowance Vaults enforce strict time and budget limits. Batch
             Disbursement routes exact stablecoin amounts to multiple recipients
