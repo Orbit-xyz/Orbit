@@ -17,7 +17,7 @@ export function Hero() {
           className="hero-copy"
         >
           <h1 className="hero-title">
-            Non-custodial programmable payment protocol for{" "}
+            Non-custodial pull payment for{" "}
             <Typewriter
               words={["businesses.", "organizations.", "developers."]}
             />
