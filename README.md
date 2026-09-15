@@ -6,7 +6,7 @@ Automate on-chain allowances, route stablecoin payouts & payrolls globally, and 
 
 ---
 
-## 🚀 Overview
+## Overview
 
 Orbit provides the missing execution layer for Web3 recurring revenue and automated global payouts:
 
@@ -17,7 +17,7 @@ Orbit provides the missing execution layer for Web3 recurring revenue and automa
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 Orbit/
@@ -34,7 +34,7 @@ Orbit/
 
 ---
 
-## 🛠️ Quickstart
+## Quickstart
 
 ### Prerequisites
 - Node.js >= 18
