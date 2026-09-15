@@ -1,6 +1,6 @@
 # Orbit: MVP Technical Specification
 
-**Orbit is a non-custodial pull-payment protocol for businesses.**
+**Orbit is a non-custodial pull payment protocol for businesses, organizations, and developers.**
 Automate on-chain allowances, route stablecoin payouts & Payrolls globally, and capture recurring revenue. We handle the on-chain execution, so you can focus on shipping code.
 
 ---
