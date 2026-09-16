@@ -10,8 +10,8 @@ export default function DocsPage() {
         <p>
           Orbit&apos;s architecture maps the MVP flow from customer checkout
           approval to merchant-triggered pull and one-click batch payout on
-          Stellar. Full interactive documentation is scheduled alongside the
-          v1 contract testnet deployment.
+          the network. Full interactive documentation is scheduled alongside the
+          v1 contract deployment.
         </p>
 
         <div className="interstitial-actions">
@@ -20,7 +20,7 @@ export default function DocsPage() {
             href="/get-started"
             data-testid="docs-button-get-started"
           >
-            Open the testnet playground
+            Open the playground
           </Link>
           <Link
             className="button button-secondary"
@@ -35,7 +35,7 @@ export default function DocsPage() {
           <p>
             Allowance Vaults enforce strict time and budget limits. Batch
             Disbursement routes exact stablecoin amounts to multiple recipients
-            in a single ledger execution block on Soroban.
+            in a single on-chain ledger execution block.
           </p>
         </div>
       </div>

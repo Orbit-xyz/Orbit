@@ -15,7 +15,7 @@ const FEATURES = [
     title: "Recurring revenue without reminders.",
     description:
       "Subscriptions and retainers become a predictable pull flow. A merchant triggers the billing action when a period is due.",
-    foot: "USDC / STELLAR TESTNET",
+    foot: "AUTOMATED SETTLEMENT",
   },
   {
     index: "03 / BATCH DISBURSEMENT",
@@ -26,9 +26,9 @@ const FEATURES = [
   },
   {
     index: "04 / PLAYGROUND",
-    title: "Prove it on testnet.",
+    title: "Interactive playground.",
     description:
-      "Everything in the MVP deploys to Stellar Testnet with testnet USDC so grant judges and builders can interact safely.",
+      "Experience the full allowance lifecycle in an interactive playground so builders can test safely.",
     foot: "SAFE TO INTERACT",
   },
 ];
@@ -51,7 +51,7 @@ export function FeaturesToolkit() {
           </div>
           <p className="section-body">
             Orbit starts with the essential rails for recurring revenue and global
-            payouts. Stablecoin-only, testnet-ready, and intentionally focused.
+            payouts. Fast, non-custodial, and intentionally focused.
           </p>
         </motion.div>
 

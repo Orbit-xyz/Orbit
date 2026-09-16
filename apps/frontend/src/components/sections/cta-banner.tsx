@@ -16,16 +16,15 @@ export function CtaBanner() {
         >
           <h2>Build revenue flows that do not need a nudge.</h2>
           <p>
-            Inspect the on-chain Allowance Vault, test batch payroll on Stellar
-            Testnet, and replace manual invoice chasing with automated pull
-            payments.
+            Inspect the on-chain Allowance Vault, test batch payroll, and
+            replace manual invoice chasing with automated pull payments.
           </p>
           <Link
             className="button button-primary button-arrow"
             href="/get-started"
             data-testid="cta-button-get-started"
           >
-            Get started with testnet
+            Get started
           </Link>
         </motion.div>
       </div>

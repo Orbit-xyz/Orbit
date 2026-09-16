@@ -6,14 +6,11 @@ import { Footer } from "@/components/layout/footer";
 export const metadata: Metadata = {
   title: "Orbit — Non-Custodial Pull Payments for Businesses",
   description:
-    "Automate on-chain allowances, route stablecoin payouts & payrolls globally, and capture recurring revenue with Soroban smart contracts on Stellar.",
+    "Automate on-chain allowances, route stablecoin payouts & payrolls globally, and capture recurring revenue with non-custodial smart contracts.",
   keywords: [
     "Orbit",
-    "Stellar",
-    "Soroban",
     "Smart Contracts",
     "Web3 Payments",
-    "USDC",
     "Pull Payments",
     "Recurring Subscriptions",
     "Crypto Payroll",

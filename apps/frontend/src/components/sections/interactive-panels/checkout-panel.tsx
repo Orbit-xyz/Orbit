@@ -22,7 +22,7 @@ export function CheckoutPanel() {
       >
         <div className="checkout-top">
           <span className="mono">ORBIT CHECKOUT SDK</span>
-          <span className="status-pill font-mono bg-white/10">STELLAR TESTNET</span>
+          <span className="status-pill font-mono bg-white/10">ON-CHAIN READY</span>
         </div>
 
         <div className="checkout-brand font-sans">
@@ -33,7 +33,7 @@ export function CheckoutPanel() {
 
         <div className="checkout-line">
           <span>Membership tier</span>
-          <strong>12 USDC</strong>
+          <strong>$12.00</strong>
         </div>
         <div className="checkout-line">
           <span>Billing cycle</span>
@@ -41,7 +41,7 @@ export function CheckoutPanel() {
         </div>
         <div className="checkout-line">
           <span>Allowance cap</span>
-          <strong>12 USDC max / cycle</strong>
+          <strong>$12.00 max / cycle</strong>
         </div>
 
         <button
@@ -69,12 +69,12 @@ export function CheckoutPanel() {
         </button>
 
         <span className="checkout-note text-white/50">
-          Connected via Freighter · Sign once, subscribe friction-free
+          Connected via Web3 wallet · Sign once, subscribe friction-free
         </span>
       </motion.div>
 
       <div className="visual-caption">
-        <span>12 USDC / month</span>
+        <span>$12.00 / month</span>
         <span>1-click recurring permission · non-custodial</span>
       </div>
     </div>

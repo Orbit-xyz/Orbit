@@ -27,16 +27,16 @@ export function MvpBoundaries() {
           <div>
             <span className="text-white font-semibold">IN SCOPE (MVP)</span>
             <p>
-              Allowance Vault smart contracts on Soroban, Batch Disbursement to
+              Allowance Vault smart contracts, Batch Disbursement to
               multiple wallets, developer SDK, responsive checkout widget, and
-              Stellar Testnet playground for safe testing.
+              an interactive playground for safe testing.
             </p>
           </div>
           <div>
             <span className="text-white/60">OUT OF SCOPE (ROADMAP)</span>
             <p>
-              Autonomous cron bots, real-time path payment asset swapping (XLM to
-              USDC), fiat credit-card on/off-ramps, and heavy enterprise
+              Autonomous cron bots, multi-currency path payment asset swapping,
+              fiat credit-card on/off-ramps, and heavy enterprise
               accounting suites are intentionally saved for V2.
             </p>
           </div>

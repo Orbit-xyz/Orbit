@@ -6,7 +6,7 @@ const STEPS = [
   {
     num: "01 / APPROVE",
     title: "Create an Allowance Vault.",
-    body: "The customer connects Freighter or xBull and signs a smart contract vault with strict time windows and spending caps.",
+    body: "The customer connects their wallet and signs a smart contract vault with strict time windows and spending caps.",
   },
   {
     num: "02 / EXECUTE",
@@ -16,7 +16,7 @@ const STEPS = [
   {
     num: "03 / SPLIT",
     title: "Pay a whole team at once.",
-    body: "Batch Disbursement routes exact USDC amounts to multiple recipient wallets simultaneously in one single ledger block.",
+    body: "Batch Disbursement routes exact payment amounts to multiple recipient wallets simultaneously in one single ledger block.",
   },
 ];
 

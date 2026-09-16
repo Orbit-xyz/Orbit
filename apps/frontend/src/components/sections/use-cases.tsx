@@ -7,7 +7,7 @@ const USE_CASES = [
     number: "01",
     audience: "The Emerging Market SaaS Founder",
     description:
-      "A developer in Nigeria, India, or Latin America building a SaaS product. Integrate checkout, let the customer pay in USDC, and settle instantly without banking borders or card declines.",
+      "A developer in Nigeria, India, or Latin America building a SaaS product. Integrate checkout, let the customer pay with one click, and settle instantly without banking borders or card declines.",
     label: "RECURRING PULL",
   },
   {
@@ -55,7 +55,7 @@ export function UseCases() {
             <h2 className="section-title">One protocol. Five ways to get paid.</h2>
           </div>
           <p className="section-body">
-            From a $0.45 API charge to a 1,200 USDC contractor payroll, Orbit
+            From a $0.45 API charge to a $1,200 contractor payroll, Orbit
             gives internet businesses an execution layer that respects the rules.
           </p>
         </motion.div>

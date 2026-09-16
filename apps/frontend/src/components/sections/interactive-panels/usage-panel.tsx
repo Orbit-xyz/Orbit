@@ -46,7 +46,7 @@ export function UsagePanel() {
 
         <div className="usage-total">
           <strong ref={countRef}>$0.45</strong>
-          <span>USDC</span>
+          <span>USD</span>
         </div>
 
         <div className="metric-row">
@@ -72,7 +72,7 @@ export function UsagePanel() {
       </motion.div>
 
       <div className="visual-caption">
-        <span>0.45 USDC</span>
+        <span>$0.45</span>
         <span>no card minimums · micro-settlement supported</span>
       </div>
     </div>

@@ -9,13 +9,12 @@ const CODE_SNIPPET = `// 1. Initialize Orbit SDK with your merchant keys
 import { Orbit } from '@orbit/sdk';
 
 const orbit = new Orbit({
-  network: 'testnet',
   merchantId: 'merch_8812f',
 });
 
 // 2. Prompt customer to approve protected Allowance Vault
 const vault = await orbit.allowance.create({
-  asset: 'USDC',
+  currency: 'USD',
   amount: '29.00',
   period: '30d',
   cap: '29.00',
@@ -105,8 +104,8 @@ export function DeveloperSdk() {
               <span className="syntax-bold">create</span>({"{"}
               {"\n"}
               <span className="syntax-dim">03</span>{"    "}
-              <span className="syntax-key">asset</span>:{" "}
-              <span className="syntax-string">&apos;USDC&apos;</span>,
+              <span className="syntax-key">currency</span>:{" "}
+              <span className="syntax-string">&apos;USD&apos;</span>,
               {"\n"}
               <span className="syntax-dim">04</span>{"    "}
               <span className="syntax-key">amount</span>:{" "}
@@ -125,7 +124,7 @@ export function DeveloperSdk() {
               {"\n\n"}
               <span className="syntax-dim">08</span>{"  "}
               <span className="syntax-response">
-                ✓ vault approved · Soroban testnet block · pull ready
+                ✓ vault approved · on-chain ledger block · pull ready
               </span>
             </code>
           </div>

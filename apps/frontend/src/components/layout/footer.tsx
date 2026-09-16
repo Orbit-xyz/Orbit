@@ -18,14 +18,14 @@ export function Footer() {
               <h3>Product</h3>
               <Link href="/#features">Allowance Vault</Link>
               <Link href="/#features">Batch Payroll</Link>
-              <Link href="/#features">Stellar Testnet</Link>
+              <Link href="/#features">Recurring Pulls</Link>
               <Link href="/pricing">Pricing Plans</Link>
             </div>
             <div className="footer-column">
               <h3>Resources</h3>
               <Link href="/docs">Documentation</Link>
               <Link href="/docs">API Reference</Link>
-              <Link href="/get-started">Testnet Playground</Link>
+              <Link href="/get-started">Developer Playground</Link>
               <Link href="/docs">SDK Quickstart</Link>
             </div>
             <div className="footer-column">
@@ -33,13 +33,7 @@ export function Footer() {
               <Link href="/docs">About Orbit</Link>
               <Link href="/docs">Brand Guidelines</Link>
               <Link href="/docs">Release Notes</Link>
-              <a
-                href="https://stellar.org"
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                Stellar Network ↗
-              </a>
+              <Link href="/docs">Network Status</Link>
             </div>
             <div className="footer-column">
               <h3>Legal</h3>
@@ -53,7 +47,7 @@ export function Footer() {
         <div className="footer-bottom">
           <span>© Orbit Technologies 2026. All rights reserved.</span>
           <span className="mono">
-            STABLECOIN PAYMENTS / SOROBAN / STELLAR TESTNET
+            PROGRAMMABLE PULL PAYMENT PROTOCOL
           </span>
         </div>
       </div>

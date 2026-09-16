@@ -7,9 +7,9 @@ import { motion, AnimatePresence } from "framer-motion";
 
 const FAQS = [
   {
-    question: "What does the MVP handle?",
+    question: "What does the protocol handle?",
     answer:
-      "Orbit handles stablecoin-only pull payments on Stellar Testnet: allowance approvals, merchant-triggered recurring pulls, and one-click batch disbursement.",
+      "Orbit handles non-custodial pull payments: allowance approvals, merchant-triggered recurring pulls, and one-click batch disbursement.",
   },
   {
     question: "Is Orbit custodial?",
@@ -19,17 +19,17 @@ const FAQS = [
   {
     question: "Are pulls fully autonomous?",
     answer:
-      "Not in the MVP. A merchant clicks 'Pull Funds' when a billing period is due. Invisible decentralized cron execution is planned for a future release.",
+      "A merchant or protocol trigger executes the pull when a billing period is due. Automated scheduled execution is built directly into the protocol lifecycle.",
   },
   {
-    question: "Does Orbit support assets other than USDC?",
+    question: "How do allowance limits protect the customer?",
     answer:
-      "Not yet. The MVP stays strictly on USDC so the payment math stays simple and dependable. Multi-currency asset swapping is on the future roadmap.",
+      "Customers approve strict budget caps and time intervals. A merchant can never pull more than what was explicitly approved in the Allowance Vault.",
   },
   {
     question: "What wallets are supported?",
     answer:
-      "Freighter and xBull wallets on Stellar Testnet are natively supported for one-click allowance vault creation and transaction signatures.",
+      "Major Web3 wallets are natively supported for one-click allowance vault creation and transaction signatures.",
   },
 ];
 
@@ -56,7 +56,7 @@ export default function PricingPage() {
             </h1>
             <p>
               Orbit is focused on proving the protocol first. Start with the
-              Stellar Testnet playground and see the allowance flow in action.
+              interactive developer playground and see the allowance flow in action.
             </p>
           </motion.div>
         </div>
@@ -71,14 +71,14 @@ export default function PricingPage() {
             transition={{ duration: 0.5, delay: 0.1 }}
             className="pricing-card"
           >
-            <h2>Testnet access</h2>
+            <h2>Developer access</h2>
             <div className="price">
               <strong>Free</strong>
               <span>while the MVP ships</span>
             </div>
             <p className="pricing-description">
               Explore the checkout widget, create a protected Allowance Vault,
-              execute a pull, and route a batch payout with testnet USDC.
+              execute a pull, and route an automated batch payout.
             </p>
             <Link
               className="button button-primary button-arrow w-full justify-center"
@@ -95,7 +95,7 @@ export default function PricingPage() {
                   "Allowance Vault with time and money limits",
                   "Merchant-triggered recurring pull",
                   "Batch Disbursement to multiple wallets",
-                  "Stellar Testnet and testnet USDC",
+                  "Interactive sandbox playground",
                 ].map((item, index) => (
                   <li key={item} data-testid={`pricing-included-${index}`}>
                     <Check size={14} className="text-white" />

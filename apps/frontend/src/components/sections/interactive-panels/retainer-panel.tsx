@@ -60,13 +60,13 @@ export function RetainerPanel() {
 
         <div className="retainer-amount">
           <strong ref={amountRef}>$2,000</strong>
-          <span>USDC / month</span>
+          <span>/ month</span>
         </div>
 
         <div className="limit-grid">
           <span>
             Monthly Cap Enforced
-            <strong>2,000 USDC maximum</strong>
+            <strong>$2,000 maximum</strong>
           </span>
           <span>
             Next Scheduled Pull
@@ -81,8 +81,8 @@ export function RetainerPanel() {
       </motion.div>
 
       <div className="visual-caption">
-        <span>2,000 USDC</span>
-        <span>time + budget limits protected on Stellar</span>
+        <span>$2,000</span>
+        <span>time + budget limits protected on-chain</span>
       </div>
     </div>
   );

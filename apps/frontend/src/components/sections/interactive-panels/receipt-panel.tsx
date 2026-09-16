@@ -30,7 +30,7 @@ export function ReceiptPanel() {
 
           <div className="receipt-order">
             <span>Order #A84-7821</span>
-            <span className="text-white/90 font-semibold">USDC / STELLAR TESTNET</span>
+            <span className="text-white/90 font-semibold">AUTOMATED PULL SETTLEMENT</span>
           </div>
 
           <div className="receipt-line">
@@ -51,7 +51,7 @@ export function ReceiptPanel() {
             <strong>$64.70</strong>
           </div>
           <div className="receipt-tax">
-            <span>Network gas · Soroban</span>
+            <span>Network gas · On-chain</span>
             <strong>$0.001</strong>
           </div>
 
@@ -59,7 +59,7 @@ export function ReceiptPanel() {
             <span>TOTAL PULLED</span>
             <strong className="flex items-center gap-2">
               <span className="line-through text-white/40 text-xs font-normal">$0.00</span>
-              <span className="text-white text-base">$70.40 USDC</span>
+              <span className="text-white text-base">$70.40</span>
             </strong>
           </div>
 
@@ -81,7 +81,7 @@ export function ReceiptPanel() {
       </div>
 
       <div className="visual-caption">
-        <span>70.40 USDC</span>
+        <span>$70.40</span>
         <span>every 30 days / pull executed on schedule</span>
       </div>
     </div>

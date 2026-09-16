@@ -8,7 +8,7 @@ export default function GetStartedPage() {
           Make the next payment <span>automatic.</span>
         </h1>
         <p>
-          Walk through the Stellar Testnet MVP: connect your Freighter or xBull
+          Walk through the Orbit interactive demo: connect your Web3
           wallet in the checkout widget, approve a time and budget allowance,
           execute the pull, and route an instant batch payout.
         </p>
@@ -33,7 +33,7 @@ export default function GetStartedPage() {
         <div className="placeholder-panel">
           <p>
             Customer approves a protected Allowance Vault. Merchant triggers the
-            pull when due. The Soroban smart contract transfers exact USDC. Zero
+            pull when due. The smart contract executes direct wallet settlement. Zero
             custody, zero chargebacks, sub-second settlement.
           </p>
         </div>
