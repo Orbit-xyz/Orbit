@@ -34,7 +34,7 @@ export default function DocsPage() {
         <div className="placeholder-panel">
           <p>
             Allowance Vaults enforce strict time and budget limits. Batch
-            Disbursement routes exact stablecoin amounts to multiple recipients
+            Disbursement routes exact USDC amounts to multiple recipients
             in a single on-chain ledger execution block.
           </p>
         </div>

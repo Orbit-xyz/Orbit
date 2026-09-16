@@ -59,7 +59,7 @@ export function ReceiptPanel() {
             <span>TOTAL PULLED</span>
             <strong className="flex items-center gap-2">
               <span className="line-through text-white/40 text-xs font-normal">$0.00</span>
-              <span className="text-white text-base">$70.40</span>
+              <span className="text-white text-base">$70.40 USDC</span>
             </strong>
           </div>
 
@@ -81,7 +81,7 @@ export function ReceiptPanel() {
       </div>
 
       <div className="visual-caption">
-        <span>$70.40</span>
+        <span>70.40 USDC</span>
         <span>every 30 days / pull executed on schedule</span>
       </div>
     </div>

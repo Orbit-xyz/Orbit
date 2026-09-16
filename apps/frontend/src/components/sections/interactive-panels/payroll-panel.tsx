@@ -16,7 +16,7 @@ export function PayrollPanel() {
         ease: "power2.out",
         onUpdate: () => {
           if (totalRef.current) {
-            totalRef.current.textContent = `$${Math.floor(obj.val).toLocaleString()}`;
+            totalRef.current.textContent = `${Math.floor(obj.val).toLocaleString()} USDC`;
           }
         },
       });
@@ -49,7 +49,7 @@ export function PayrollPanel() {
             <strong>Frontend Engineer</strong>
             <small>Ghana · wallet …8f2a</small>
           </span>
-          <b>$400</b>
+          <b>400 USDC</b>
         </div>
 
         <div className="payroll-row">
@@ -58,7 +58,7 @@ export function PayrollPanel() {
             <strong>Smart Contract Dev</strong>
             <small>India · wallet …11c9</small>
           </span>
-          <b>$600</b>
+          <b>600 USDC</b>
         </div>
 
         <div className="payroll-row">
@@ -67,19 +67,19 @@ export function PayrollPanel() {
             <strong>Community Lead</strong>
             <small>Brazil · wallet …a04d</small>
           </span>
-          <b>$200</b>
+          <b>200 USDC</b>
         </div>
 
         <div className="payroll-total">
           <span>ONE LEDGER EXECUTION BLOCK</span>
           <strong ref={totalRef} className="font-mono text-base text-white">
-            $1,200
+            1,200 USDC
           </strong>
         </div>
       </motion.div>
 
       <div className="visual-caption">
-        <span>$1,200 total</span>
+        <span>1,200 USDC total</span>
         <span>15 countries · single signature disbursement</span>
       </div>
     </div>

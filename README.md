@@ -11,7 +11,7 @@ Automate on-chain allowances, route stablecoin payouts & payrolls globally, and 
 Orbit provides the missing execution layer for Web3 recurring revenue and automated global payouts:
 
 - **Allowance Vault**: Smart contract-enforced time and budget limits. Approve once, execute within the rules.
-- **Recurring Pulls**: Seamless SaaS subscriptions and retainer billing without manual monthly signatures.
+- **Recurring Pulls**: Seamless SaaS subscriptions and retainer billing in USDC without manual monthly signatures.
 - **Batch Disbursement**: Disburse payroll or contributor splits to multiple global wallets in a single ledger block.
 - **High-Throughput Settlement**: Built for instant finality and sub-cent transaction fees directly on-chain.
 

@@ -16,7 +16,7 @@ const STEPS = [
   {
     num: "03 / SPLIT",
     title: "Pay a whole team at once.",
-    body: "Batch Disbursement routes exact payment amounts to multiple recipient wallets simultaneously in one single ledger block.",
+    body: "Batch Disbursement routes exact USDC amounts to multiple recipient wallets simultaneously in one single ledger block.",
   },
 ];
 

@@ -22,9 +22,9 @@ const FAQS = [
       "A merchant or protocol trigger executes the pull when a billing period is due. Automated scheduled execution is built directly into the protocol lifecycle.",
   },
   {
-    question: "How do allowance limits protect the customer?",
+    question: "Why does Orbit focus on USDC?",
     answer:
-      "Customers approve strict budget caps and time intervals. A merchant can never pull more than what was explicitly approved in the Allowance Vault.",
+      "USDC is the most reliable, fully backed digital dollar with zero price volatility. Subscriptions, retainers, and payroll remain crystal clear and predictable for both merchants and payers.",
   },
   {
     question: "What wallets are supported?",
@@ -78,7 +78,7 @@ export default function PricingPage() {
             </div>
             <p className="pricing-description">
               Explore the checkout widget, create a protected Allowance Vault,
-              execute a pull, and route an automated batch payout.
+              execute a pull, and route an automated batch payout with USDC.
             </p>
             <Link
               className="button button-primary button-arrow w-full justify-center"
@@ -93,7 +93,7 @@ export default function PricingPage() {
               <ul>
                 {[
                   "Allowance Vault with time and money limits",
-                  "Merchant-triggered recurring pull",
+                  "Merchant-triggered recurring pull in USDC",
                   "Batch Disbursement to multiple wallets",
                   "Interactive sandbox playground",
                 ].map((item, index) => (

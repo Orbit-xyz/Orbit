@@ -14,7 +14,7 @@ const orbit = new Orbit({
 
 // 2. Prompt customer to approve protected Allowance Vault
 const vault = await orbit.allowance.create({
-  currency: 'USD',
+  asset: 'USDC',
   amount: '29.00',
   period: '30d',
   cap: '29.00',
@@ -104,8 +104,8 @@ export function DeveloperSdk() {
               <span className="syntax-bold">create</span>({"{"}
               {"\n"}
               <span className="syntax-dim">03</span>{"    "}
-              <span className="syntax-key">currency</span>:{" "}
-              <span className="syntax-string">&apos;USD&apos;</span>,
+              <span className="syntax-key">asset</span>:{" "}
+              <span className="syntax-string">&apos;USDC&apos;</span>,
               {"\n"}
               <span className="syntax-dim">04</span>{"    "}
               <span className="syntax-key">amount</span>:{" "}

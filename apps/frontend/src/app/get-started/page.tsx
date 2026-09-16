@@ -33,7 +33,7 @@ export default function GetStartedPage() {
         <div className="placeholder-panel">
           <p>
             Customer approves a protected Allowance Vault. Merchant triggers the
-            pull when due. The smart contract executes direct wallet settlement. Zero
+            pull when due. The smart contract executes direct wallet settlement in USDC. Zero
             custody, zero chargebacks, sub-second settlement.
           </p>
         </div>

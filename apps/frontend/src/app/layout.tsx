@@ -9,6 +9,7 @@ export const metadata: Metadata = {
     "Automate on-chain allowances, route stablecoin payouts & payrolls globally, and capture recurring revenue with non-custodial smart contracts.",
   keywords: [
     "Orbit",
+    "USDC",
     "Smart Contracts",
     "Web3 Payments",
     "Pull Payments",
