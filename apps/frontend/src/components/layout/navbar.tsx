@@ -7,12 +7,18 @@ import { Menu, X, ArrowUpRight } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 import { Brand } from "./brand";
+import { useAuth } from "@/lib/auth-context";
 
 export function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
+  const { user, signOut } = useAuth();
 
   const closeMenu = () => setIsOpen(false);
+
+  if (pathname?.startsWith("/dashboard") || pathname?.startsWith("/pay") || pathname?.startsWith("/docs")) {
+    return null;
+  }
 
   return (
     <header className="site-header">
@@ -50,20 +56,42 @@ export function Navbar() {
         </nav>
 
         <div className="nav-actions">
-          <Link
-            className="nav-link"
-            href="/signin"
-            data-testid="link-signin"
-          >
-            Sign in
-          </Link>
-          <Link
-            className="button button-primary button-arrow"
-            href="/get-started"
-            data-testid="link-get-started"
-          >
-            Get started
-          </Link>
+          {user ? (
+            <div className="flex items-center gap-3">
+              <Link
+                className="button button-primary"
+                href="/dashboard"
+                data-testid="link-dashboard"
+              >
+                Dashboard
+              </Link>
+              <button
+                type="button"
+                onClick={() => signOut()}
+                className="text-xs text-neutral-500 hover:text-black font-medium transition-colors"
+                title="Sign out"
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <>
+              <Link
+                className="nav-link"
+                href="/signin"
+                data-testid="link-signin"
+              >
+                Sign in
+              </Link>
+              <Link
+                className="button button-primary button-arrow"
+                href="/get-started"
+                data-testid="link-get-started"
+              >
+                Get started
+              </Link>
+            </>
+          )}
         </div>
 
         <button
@@ -123,22 +151,47 @@ export function Navbar() {
               </Link>
 
               <div className="mobile-nav-actions pt-2 border-t border-[rgba(0,0,0,0.08)]">
-                <Link
-                  className="nav-link text-center py-2"
-                  href="/signin"
-                  onClick={closeMenu}
-                  data-testid="mobile-link-signin"
-                >
-                  Sign in
-                </Link>
-                <Link
-                  className="button button-primary button-arrow w-full justify-center"
-                  href="/get-started"
-                  onClick={closeMenu}
-                  data-testid="mobile-button-get-started"
-                >
-                  Get started
-                </Link>
+                {user ? (
+                  <div className="flex flex-col gap-2">
+                    <Link
+                      className="button button-primary w-full justify-center"
+                      href="/dashboard"
+                      onClick={closeMenu}
+                      data-testid="mobile-link-dashboard"
+                    >
+                      Dashboard
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        signOut();
+                        closeMenu();
+                      }}
+                      className="text-xs text-neutral-500 hover:text-black text-center py-2 font-medium"
+                    >
+                      Sign out
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <Link
+                      className="nav-link text-center py-2"
+                      href="/signin"
+                      onClick={closeMenu}
+                      data-testid="mobile-link-signin"
+                    >
+                      Sign in
+                    </Link>
+                    <Link
+                      className="button button-primary button-arrow w-full justify-center"
+                      href="/get-started"
+                      onClick={closeMenu}
+                      data-testid="mobile-button-get-started"
+                    >
+                      Get started
+                    </Link>
+                  </>
+                )}
               </div>
             </div>
           </motion.div>

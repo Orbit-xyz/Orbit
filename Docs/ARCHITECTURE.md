@@ -118,3 +118,92 @@ When building a Web3 project, you don't build the UI first. You build the scarie
 1. **The Soroban Allowance Logic:** We need to make sure Soroban actually allows a third party (the backend) to execute a transfer on behalf of a user *after* the initial allowance is signed, without requiring a fresh signature. **(Action: Write a simple Rust script to test this before touching Next.js).**
 2. **Freighter Wallet UI in the SDK:** Connecting a wallet and triggering a contract call from inside an embedded React widget can get messy with browser extensions. **(Action: Build a blank React page that just connects Freighter and signs a dummy transaction).**
 3. **Decimal Math in Rust:** Processing USDC requires handling 7 decimal places accurately in Rust without rounding errors. **(Action: Use standard Stellar SDK data types for currency).**
+
+---
+
+## 5. The Merchant Control Center Architecture (Dashboard Spec)
+
+Orbit's Merchant Control Center adapts the battle-tested ergonomics of top billing platforms (like Bachs and Stripe) while shedding the Web2 fiat bloat (bank holding accounts, slow KYC queues, card dispute/chargeback fees) in favor of non-custodial digital dollar rails (USDC).
+
+```text
+ORBIT MERCHANT CONTROL CENTER
+├── 1. Overview (Home)
+│    ├── Treasury Wallet Status: Connected [0x... / G...]
+│    ├── Core Metrics: Total MRR (USDC), Active Subscribers, Settled Volume, Protocol Finality
+│    └── Settled Revenue Chart: Minimal interactive line graph with hover timestamps & amounts
+│
+├── 2. Subscription Plans ("Products")
+│    ├── Table of active plans (e.g., MailKit Pro — 29 USDC / 30 days)
+│    └── "+ Create Plan" wizard (Generates unique plan_id & drop-in Checkout Widget snippet)
+│
+├── 3. Subscribers ("Customers")
+│    ├── Customer wallet address, Plan tier, Status (Active / Expired), Next Billing Date
+│    └── "Execute Pull" trigger button (executes on-chain contract pull when payment is due)
+│
+├── 4. Batch Payroll Engine (Orbit's Superpower)
+│    ├── Drag & drop CSV parser for global contractor wallets + USDC amounts
+│    ├── Client-side validation & total payout sum calculation
+│    └── 1-Click "Run Payroll" button executed via a single wallet signature
+│
+├── 5. Payment Links (Hosted Checkout)
+│    ├── Shareable checkout URLs for B2B retainers ($2,000/mo) & creator communities
+│    └── 100% no-code onboarding (no SDK installation required)
+│
+└── 6. Developer Portal (API & Webhooks)
+     ├── API Keys: Secret keys (`orb_live_...`, `orb_test_...`) for programmatic usage billing
+     ├── Webhooks: Endpoint registration to broadcast on-chain settlement events to merchant servers
+     └── SDK Quickstart & code samples
+```
+
+---
+
+## 6. Developer API & Programmatic Usage Billing
+
+To support API builders and AI startups (Use Case 2), Orbit bridges no-code dashboard founders and technical developers who require programmatic billing:
+
+### A. Authentication
+Developers generate an `ORBIT_SECRET_KEY` directly inside the Developer Portal. Every API request is authenticated via Bearer token:
+```bash
+Authorization: Bearer orb_sec_live_9482...
+```
+
+### B. Triggering a Usage-Based Pull
+When a customer uses an API or AI compute, the merchant server can trigger an allowance pull programmatically without UI interaction:
+```bash
+POST https://api.orbit.network/v1/pulls
+Content-Type: application/json
+Authorization: Bearer orb_sec_live_9482...
+
+{
+  "subscription_id": "sub_8921",
+  "amount": 3.45,
+  "currency": "USDC",
+  "idempotency_key": "idem_req_001"
+}
+```
+
+### C. Webhook Event Distribution
+Orbit delivers cryptographically signed webhooks to merchant servers for automated customer access provisioning:
+* `subscription.created`: Customer approved initial allowance vault.
+* `payment.settled`: Recurring monthly pull or usage charge succeeded on-chain.
+* `subscription.cancelled`: Customer revoked allowance.
+* `payroll.disbursed`: Batch contractor payout completed in single ledger block.
+
+---
+
+## 7. Multichain Architecture & Linked Settlement Vaults
+
+Orbit operates across both high-speed Soroban (Stellar) and EVM (Arc Network) environments. To eliminate the friction of constantly switching or disconnecting wallets, Orbit uses a **Linked Settlement Vault** model:
+
+```text
+MERCHANT MULTI-CHAIN PROFILE
+├── Stellar Soroban Vault  ──>  Freighter / Albedo (GB3X...94QA)  [Active & Verified]
+└── Arc Network Vault      ──>  MetaMask / AppKit  (0x71C...3F29)  [Active & Verified]
+```
+
+### Key Principles:
+1. **Offline Settlement:** Automated recurring pulls do not require the merchant's wallet to be connected. Funds route on-chain directly to the merchant's registered treasury address for that specific network.
+2. **Persistent Multi-Chain State:** The merchant links their Stellar address and EVM address once. Both remain active concurrently; customers subscribing via Stellar pay to the Stellar vault, while customers on Arc pay to the EVM vault.
+3. **Network-Contextual Actions:** When performing on-chain administrative tasks (such as signing a Batch Payroll disbursement or altering a plan), the dashboard prompts the appropriate wallet provider for that specific chain.
+
+

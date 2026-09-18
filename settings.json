@@ -1,0 +1,10 @@
+{
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "typescript.tsdk": "apps/frontend/node_modules/typescript/lib",
+  "rust-analyzer.linkedProjects": [
+    "contracts/soroban/Cargo.toml"
+  ]
+}

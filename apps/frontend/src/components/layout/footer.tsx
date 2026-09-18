@@ -1,7 +1,16 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Brand } from "./brand";
 
 export function Footer() {
+  const pathname = usePathname();
+
+  if (pathname?.startsWith("/dashboard") || pathname?.startsWith("/pay") || pathname?.startsWith("/docs")) {
+    return null;
+  }
+
   return (
     <footer className="site-footer">
       <div className="orbit-container">
