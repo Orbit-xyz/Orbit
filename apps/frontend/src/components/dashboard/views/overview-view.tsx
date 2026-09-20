@@ -18,12 +18,14 @@ import {
 } from "lucide-react";
 import { MerchantUser } from "@/lib/auth-context";
 import { DashboardTab, NetworkId, NETWORKS } from "../dashboard-types";
+import { useWallet } from "@/lib/use-wallet";
 
 interface OverviewViewProps {
   user: MerchantUser;
   activeNetwork: NetworkId;
   onNavigateTab: (tab: DashboardTab) => void;
   onOpenVaultModal: () => void;
+  onOpenConnectModal: () => void;
 }
 
 export function OverviewView({
@@ -31,7 +33,9 @@ export function OverviewView({
   activeNetwork,
   onNavigateTab,
   onOpenVaultModal,
+  onOpenConnectModal,
 }: OverviewViewProps) {
+  const wallet = useWallet(activeNetwork);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<"7D" | "30D" | "ALL">("30D");
 
@@ -41,8 +45,26 @@ export function OverviewView({
     setTimeout(() => setCopiedKey(null), 1800);
   };
 
-  const stellarVault = user.linkedVaults?.stellar || ((user.walletAddress && isStellarAddress(user.walletAddress) ? user.walletAddress : "GB3XQ...94QA"));
-  const arcVault = user.linkedVaults?.arc || ((user.walletAddress && isEvmAddress(user.walletAddress) ? user.walletAddress : "0x71C2...3F29"));
+  // Settlement address for the network currently selected in the switcher.
+  //
+  // Priority: the wallet connected right now, then an address linked earlier.
+  // There is deliberately NO placeholder fallback — this field previously
+  // rendered "0x71C2...3F29" behind a green ACTIVE badge and a copy button,
+  // which is a fabricated address. Copying it and sending USDC would lose the
+  // funds. When nothing is connected the card now says so.
+  const linkedForNetwork =
+    activeNetwork === "arc-testnet" ? user.linkedVaults?.arc : user.linkedVaults?.stellar;
+
+  const validLinked =
+    linkedForNetwork &&
+    (activeNetwork === "arc-testnet"
+      ? isEvmAddress(linkedForNetwork)
+      : isStellarAddress(linkedForNetwork))
+      ? linkedForNetwork
+      : undefined;
+
+  const settlementAddress = wallet.address ?? validLinked;
+  const isLiveConnection = Boolean(wallet.address);
 
   // Mock settled revenue curve data points
   const revenuePoints = [
@@ -75,40 +97,80 @@ export function OverviewView({
               </p>
             </div>
           </div>
-          <button
-            onClick={onOpenVaultModal}
-            className="button button-secondary text-xs h-9 px-3 shrink-0 self-start md:self-auto"
-          >
-            Manage Vault
-          </button>
-        </div>
-
-        <div className="mt-5 p-4 rounded-lg border border-black/10 bg-neutral-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0"></div>
-            <div>
-              <div className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">
-                Active Settlement Address
-              </div>
-              <div className="font-mono text-xs font-semibold text-black mt-0.5 break-all sm:break-normal">
-                {user.walletAddress || arcVault || stellarVault}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-[10px] font-mono px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
-              NON-CUSTODIAL · ACTIVE
-            </span>
+          <div className="flex items-center gap-2 shrink-0 self-start md:self-auto">
+            {!isLiveConnection && (
+              <button
+                onClick={onOpenConnectModal}
+                className="text-xs h-9 px-3 rounded-lg bg-black text-white font-semibold hover:bg-neutral-800 transition-colors flex items-center gap-1.5"
+              >
+                <Wallet size={13} />
+                Connect Wallet
+              </button>
+            )}
             <button
-              onClick={() => copyToClipboard(user.walletAddress || arcVault || stellarVault, "vault")}
-              className="p-1.5 rounded hover:bg-black/5 text-neutral-500 hover:text-black transition-colors"
-              title="Copy address"
+              onClick={onOpenVaultModal}
+              className="button button-secondary text-xs h-9 px-3"
             >
-              {copiedKey === "vault" ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+              Manage Vault
             </button>
           </div>
         </div>
+
+        {settlementAddress ? (
+          <div className="mt-5 p-4 rounded-lg border border-black/10 bg-neutral-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0"></div>
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">
+                  Active Settlement Address · {NETWORKS[activeNetwork].name}
+                </div>
+                <div className="font-mono text-xs font-semibold text-black mt-0.5 break-all sm:break-normal">
+                  {settlementAddress}
+                </div>
+                <div className="text-[10px] text-neutral-500 mt-1">
+                  {isLiveConnection
+                    ? "Connected wallet — signs and receives on this rail."
+                    : "Linked manually. Connect the wallet to sign transactions from the dashboard."}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-[10px] font-mono px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+                NON-CUSTODIAL · ACTIVE
+              </span>
+              <button
+                onClick={() => copyToClipboard(settlementAddress, "vault")}
+                className="p-1.5 rounded hover:bg-black/5 text-neutral-500 hover:text-black transition-colors"
+                title="Copy address"
+              >
+                {copiedKey === "vault" ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 p-4 rounded-lg border border-dashed border-black/15 bg-neutral-50/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-2.5 h-2.5 rounded-full bg-neutral-300 shrink-0"></div>
+              <div>
+                <div className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider">
+                  No settlement address on {NETWORKS[activeNetwork].name}
+                </div>
+                <div className="text-xs text-neutral-600 mt-0.5">
+                  Connect a wallet on this network, or add an address manually, before
+                  collecting payments.
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={onOpenConnectModal}
+              className="text-xs h-9 px-3 rounded-lg bg-black text-white font-semibold hover:bg-neutral-800 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <Wallet size={13} />
+              Connect Wallet
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 2. Core KPI Metrics Cards */}

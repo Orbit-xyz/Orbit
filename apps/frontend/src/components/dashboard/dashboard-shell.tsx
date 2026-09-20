@@ -361,6 +361,7 @@ export function DashboardShell() {
               activeNetwork={activeNetwork}
               onNavigateTab={(tab) => setActiveTab(tab)}
               onOpenVaultModal={() => setIsVaultModalOpen(true)}
+              onOpenConnectModal={() => setIsConnectModalOpen(true)}
             />
           )}
 
