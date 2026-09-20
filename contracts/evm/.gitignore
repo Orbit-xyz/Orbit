@@ -1,0 +1,12 @@
+# Foundry build output
+out/
+cache/
+broadcast/
+
+# Dependencies (installed via forge install / git clone)
+lib/
+
+# Env
+.env
+.env.*
+!.env.example
