@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { isStellarAddress, isEvmAddress } from "@/lib/utils";
 import { X, Wallet, CheckCircle2, Shield } from "lucide-react";
 import { MerchantUser } from "@/lib/auth-context";
 
@@ -13,10 +14,10 @@ interface VaultModalProps {
 
 export function VaultModal({ isOpen, onClose, user, onUpdateVault }: VaultModalProps) {
   const [stellarAddress, setStellarAddress] = useState(
-    user.linkedVaults?.stellar || (user.walletAddress?.startsWith("G") ? user.walletAddress : "")
+    user.linkedVaults?.stellar || ((user.walletAddress && isStellarAddress(user.walletAddress) ? user.walletAddress : ""))
   );
   const [arcAddress, setArcAddress] = useState(
-    user.linkedVaults?.arc || (user.walletAddress?.startsWith("0x") ? user.walletAddress : "")
+    user.linkedVaults?.arc || ((user.walletAddress && isEvmAddress(user.walletAddress) ? user.walletAddress : ""))
   );
   const [savedSuccess, setSavedSuccess] = useState(false);
 

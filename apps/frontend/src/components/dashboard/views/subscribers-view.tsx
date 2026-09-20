@@ -17,7 +17,9 @@ import {
   AlertCircle,
   Filter,
 } from "lucide-react";
-import { SubscriberRecord } from "../dashboard-types";
+import { SubscriberRecord, NETWORKS } from "../dashboard-types";
+import { useOrbitArc, describeOrbitError } from "@/lib/use-orbit";
+import { isEvmAddress, truncateAddress } from "@/lib/utils";
 
 const INITIAL_SUBSCRIBERS: SubscriberRecord[] = [
   {
@@ -89,6 +91,10 @@ export function SubscribersView() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [executingPullId, setExecutingPullId] = useState<string | null>(null);
   const [pullSuccessMessage, setPullSuccessMessage] = useState<string | null>(null);
+  const [pullErrorMessage, setPullErrorMessage] = useState<string | null>(null);
+  const [pullTxUrl, setPullTxUrl] = useState<string | null>(null);
+
+  const orbit = useOrbitArc();
   const [isBatchPulling, setIsBatchPulling] = useState(false);
 
   const copyToClipboard = (text: string, key: string) => {
@@ -97,34 +103,67 @@ export function SubscribersView() {
     setTimeout(() => setCopiedKey(null), 1800);
   };
 
-  // Execute Pull Trigger (simulates on-chain Soroban pull_funds execution)
+  /**
+   * Execute Pull.
+   *
+   * On Arc this submits a real `pullFunds` transaction and waits for the
+   * receipt, so the row only updates once the chain has accepted it. The
+   * previous version resolved on a 1.2s timer and would show "settled" even
+   * for a transaction that reverted.
+   *
+   * Stellar subscribers still simulate — that rail is driven from the backend
+   * (Task 6.7), not the browser — but the message now says so plainly rather
+   * than claiming an on-chain settlement that did not happen.
+   */
   const handleExecutePull = async (sub: SubscriberRecord) => {
     setExecutingPullId(sub.id);
     setPullSuccessMessage(null);
+    setPullErrorMessage(null);
+    setPullTxUrl(null);
 
-    // Simulate 1.2s Soroban ledger execution
-    setTimeout(() => {
+    const applySettlement = () =>
       setSubscribers((prev) =>
-        prev.map((s) => {
-          if (s.id === sub.id) {
-            return {
-              ...s,
-              status: "active",
-              nextPullDate: "In 30 days",
-              totalSettled: s.totalSettled + s.amount,
-            };
-          }
-          return s;
-        })
+        prev.map((s) =>
+          s.id === sub.id
+            ? {
+                ...s,
+                status: "active" as const,
+                nextPullDate: "In 30 days",
+                totalSettled: s.totalSettled + s.amount,
+              }
+            : s
+        )
       );
 
-      setExecutingPullId(null);
+    if (sub.network !== "arc-testnet" || !isEvmAddress(sub.walletAddress)) {
+      setTimeout(() => {
+        applySettlement();
+        setExecutingPullId(null);
+        setPullSuccessMessage(
+          `Simulated pull of ${sub.amount.toFixed(2)} USDC from ${truncateAddress(sub.walletAddress)}. This rail settles from the backend, not the dashboard — no transaction was broadcast.`
+        );
+        setTimeout(() => setPullSuccessMessage(null), 6000);
+      }, 1200);
+      return;
+    }
+
+    try {
+      if (!orbit.isConnected) await orbit.connect();
+
+      const { hash, explorerUrl } = await orbit.pullFunds(
+        sub.walletAddress as `0x${string}`
+      );
+
+      applySettlement();
       setPullSuccessMessage(
-        `On-Chain Pull Settled! ${sub.amount} USDC pulled from ${sub.walletAddress.slice(0, 4)}...${sub.walletAddress.slice(-4)} into your treasury vault (1.2s finality).`
+        `Settled ${sub.amount.toFixed(2)} USDC from ${truncateAddress(sub.walletAddress)} on Arc. Transaction ${truncateAddress(hash, 10, 8)} confirmed.`
       );
-
-      setTimeout(() => setPullSuccessMessage(null), 6000);
-    }, 1200);
+      setPullTxUrl(explorerUrl);
+    } catch (err) {
+      setPullErrorMessage(describeOrbitError(err));
+    } finally {
+      setExecutingPullId(null);
+    }
   };
 
   // Batch Pull All Due
@@ -214,6 +253,25 @@ export function SubscribersView() {
           <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
           <div className="flex-1">
             <span className="font-semibold">Protocol Execution Verified:</span> {pullSuccessMessage}
+            {pullTxUrl && (
+              <a
+                href={pullTxUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-2 inline-flex items-center gap-1 font-semibold underline underline-offset-2"
+              >
+                View on explorer <ExternalLink size={11} />
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {pullErrorMessage && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-950 flex items-start gap-3 animate-in fade-in duration-200 shadow-xs">
+          <AlertCircle size={18} className="text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <span className="font-semibold">Pull failed:</span> {pullErrorMessage}
           </div>
         </div>
       )}
@@ -358,7 +416,7 @@ export function SubscribersView() {
                             )}
                           </button>
                           <a
-                            href={`https://stellar.expert/explorer/testnet/account/${sub.walletAddress}`}
+                            href={`${NETWORKS[sub.network].explorerUrl}/${NETWORKS[sub.network].id === "arc-testnet" ? "address" : "account"}/${sub.walletAddress}`}
                             target="_blank"
                             rel="noreferrer"
                             className="p-1 rounded hover:bg-black/5 text-neutral-400 hover:text-black transition-colors"

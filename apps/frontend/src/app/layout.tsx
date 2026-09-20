@@ -28,6 +28,7 @@ export const metadata: Metadata = {
 };
 
 import { AuthProvider } from "@/lib/auth-context";
+import { Web3Provider } from "@/lib/web3-provider";
 
 export default function RootLayout({
   children,
@@ -42,13 +43,15 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/favicon-badge.png?v=3" />
       </head>
       <body className="min-h-screen bg-[#FAFAFB] text-[#09090B] selection:bg-black selection:text-white antialiased">
-        <AuthProvider>
-          <div className="flex flex-col min-h-screen">
-            <Navbar />
-            <div className="flex-1">{children}</div>
-            <Footer />
-          </div>
-        </AuthProvider>
+        <Web3Provider>
+          <AuthProvider>
+            <div className="flex flex-col min-h-screen">
+              <Navbar />
+              <div className="flex-1">{children}</div>
+              <Footer />
+            </div>
+          </AuthProvider>
+        </Web3Provider>
       </body>
     </html>
   );

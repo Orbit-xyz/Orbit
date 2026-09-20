@@ -126,3 +126,44 @@ export function formatUsdc(
 export function formatAmount(amount: number, fractionDigits = 2): string {
   return amount.toFixed(fractionDigits);
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Address validation                                                        */
+/* -------------------------------------------------------------------------- */
+/*
+ *  The two rails use incompatible address formats, and a merchant pasting the
+ *  wrong one into the wrong vault means payouts routed into the void. These
+ *  check the actual shape rather than the first character.
+ */
+
+/** Stellar public key: 56 chars, base32 alphabet (A–Z, 2–7), 'G' prefix. */
+export function isStellarAddress(value: string): boolean {
+  return /^G[A-Z2-7]{55}$/.test(value.trim());
+}
+
+/** EVM address: '0x' plus exactly 40 hex characters. */
+export function isEvmAddress(value: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
+}
+
+/**
+ * Identify which rail an address belongs to.
+ *
+ * Returns null for anything that is not a valid address on either chain —
+ * which the caller must handle. The previous `startsWith("G")` heuristic
+ * classified every non-Stellar string, including typos and empty-ish input,
+ * as a valid Arc address.
+ */
+export function detectAddressChain(value: string): "stellar" | "arc" | null {
+  const trimmed = value.trim();
+  if (isStellarAddress(trimmed)) return "stellar";
+  if (isEvmAddress(trimmed)) return "arc";
+  return null;
+}
+
+/** Short display form: 0x1234…abcd / GABC…WXYZ */
+export function truncateAddress(value: string, lead = 6, tail = 4): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= lead + tail + 1) return trimmed;
+  return `${trimmed.slice(0, lead)}…${trimmed.slice(-tail)}`;
+}

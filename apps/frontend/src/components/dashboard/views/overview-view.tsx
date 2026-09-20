@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { isStellarAddress, isEvmAddress } from "@/lib/utils";
 import {
   Wallet,
   ArrowUpRight,
@@ -40,8 +41,8 @@ export function OverviewView({
     setTimeout(() => setCopiedKey(null), 1800);
   };
 
-  const stellarVault = user.linkedVaults?.stellar || (user.walletAddress?.startsWith("G") ? user.walletAddress : "GB3XQ...94QA");
-  const arcVault = user.linkedVaults?.arc || (user.walletAddress?.startsWith("0x") ? user.walletAddress : "0x71C2...3F29");
+  const stellarVault = user.linkedVaults?.stellar || ((user.walletAddress && isStellarAddress(user.walletAddress) ? user.walletAddress : "GB3XQ...94QA"));
+  const arcVault = user.linkedVaults?.arc || ((user.walletAddress && isEvmAddress(user.walletAddress) ? user.walletAddress : "0x71C2...3F29"));
 
   // Mock settled revenue curve data points
   const revenuePoints = [
