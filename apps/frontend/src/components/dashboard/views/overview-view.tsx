@@ -24,7 +24,6 @@ interface OverviewViewProps {
   user: MerchantUser;
   activeNetwork: NetworkId;
   onNavigateTab: (tab: DashboardTab) => void;
-  onOpenVaultModal: () => void;
   onOpenConnectModal: () => void;
 }
 
@@ -32,7 +31,6 @@ export function OverviewView({
   user,
   activeNetwork,
   onNavigateTab,
-  onOpenVaultModal,
   onOpenConnectModal,
 }: OverviewViewProps) {
   const wallet = useWallet(activeNetwork);
@@ -107,12 +105,6 @@ export function OverviewView({
                 Connect Wallet
               </button>
             )}
-            <button
-              onClick={onOpenVaultModal}
-              className="button button-secondary text-xs h-9 px-3"
-            >
-              Manage Vault
-            </button>
           </div>
         </div>
 

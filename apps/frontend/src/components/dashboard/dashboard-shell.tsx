@@ -15,7 +15,6 @@ import {
   ChevronDown,
   Menu,
   X,
-  ShieldCheck,
   Globe,
   Wallet,
   Copy,
@@ -31,7 +30,6 @@ import { SubscribersView } from "./views/subscribers-view";
 import { PayrollView } from "./views/payroll-view";
 import { PaymentLinksView } from "./views/payment-links-view";
 import { DevelopersView } from "./views/developers-view";
-import { VaultModal } from "./modals/vault-modal";
 import { ConnectWalletModal } from "@/components/wallet/connect-wallet-modal";
 import { useWallet } from "@/lib/use-wallet";
 import { truncateAddress } from "@/lib/utils";
@@ -48,7 +46,6 @@ export function DashboardShell() {
   const [activeNetwork, setActiveNetwork] = useState<NetworkId>("stellar-testnet");
   const [isNetworkDropdownOpen, setIsNetworkDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isVaultModalOpen, setIsVaultModalOpen] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
 
   // Wallet state follows the network switcher, so "Connect Wallet" always offers
@@ -287,23 +284,6 @@ export function DashboardShell() {
             </button>
           )}
 
-          {/* Linked Vaults Status Pill */}
-          <button
-            onClick={() => setIsVaultModalOpen(true)}
-            className="w-full text-left p-2.5 rounded-lg border border-black/10 hover:border-black/30 bg-neutral-50/60 hover:bg-neutral-50 transition-colors"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider flex items-center gap-1.5">
-                <ShieldCheck size={12} className="text-emerald-600" />
-                Settlement Vault
-              </span>
-              <span className="text-[10px] font-mono text-emerald-600 font-bold">READY</span>
-            </div>
-            <div className="text-[11px] text-neutral-600 truncate mt-1">
-              Non-Custodial USDC Treasury
-            </div>
-          </button>
-
           {/* User Sign Out */}
           <div className="flex items-center justify-between pt-1 text-xs text-neutral-500">
             <span className="truncate max-w-[140px] font-semibold text-black" title={user.businessName}>
@@ -360,7 +340,6 @@ export function DashboardShell() {
               user={user}
               activeNetwork={activeNetwork}
               onNavigateTab={(tab) => setActiveTab(tab)}
-              onOpenVaultModal={() => setIsVaultModalOpen(true)}
               onOpenConnectModal={() => setIsConnectModalOpen(true)}
             />
           )}
@@ -390,12 +369,6 @@ export function DashboardShell() {
         }}
       />
 
-      <VaultModal
-        isOpen={isVaultModalOpen}
-        onClose={() => setIsVaultModalOpen(false)}
-        user={user}
-        onUpdateVault={updateVault}
-      />
     </div>
   );
 }
