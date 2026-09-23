@@ -15,21 +15,19 @@ import {
   Users,
   ExternalLink,
 } from "lucide-react";
-import { MerchantUser } from "@/lib/auth-context";
+import { MerchantUser, useAuth } from "@/lib/auth-context";
 import { DashboardTab, NetworkId, NETWORKS } from "../dashboard-types";
 
 interface OverviewViewProps {
   user: MerchantUser;
   activeNetwork: NetworkId;
   onNavigateTab: (tab: DashboardTab) => void;
-  onOpenVaultModal: () => void;
 }
 
 export function OverviewView({
   user,
   activeNetwork,
   onNavigateTab,
-  onOpenVaultModal,
 }: OverviewViewProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState<"7D" | "30D" | "ALL">("30D");
@@ -40,7 +38,37 @@ export function OverviewView({
     setTimeout(() => setCopiedKey(null), 1800);
   };
 
-  const stellarVault = user.linkedVaults?.stellar || (user.walletAddress?.startsWith("G") ? user.walletAddress : "GB3XQ...94QA");
+  const { updateWallet } = useAuth();
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectError, setConnectError] = useState("");
+
+  // No placeholder: the settlement address only exists once a wallet is linked.
+  const settlementAddress = user.walletAddress || user.linkedVaults?.stellar || "";
+  const isConnected = Boolean(settlementAddress);
+
+  const handleConnectWallet = async () => {
+    setConnectError("");
+    setIsConnecting(true);
+
+    const win = typeof window !== "undefined" ? (window as any) : null;
+    let address = "";
+
+    try {
+      if (win?.freighterApi?.getPublicKey) {
+        address = await win.freighterApi.getPublicKey();
+      } else if (win?.freighter?.requestAccess) {
+        address = await win.freighter.requestAccess();
+      } else {
+        setConnectError("Freighter not detected. Install the extension to link a vault.");
+      }
+    } catch (err) {
+      console.warn("Freighter wallet not responding:", err);
+      setConnectError("Freighter rejected the request.");
+    }
+
+    if (address) updateWallet(address);
+    setIsConnecting(false);
+  };
 
   // Mock settled revenue curve data points
   const revenuePoints = [
@@ -74,13 +102,23 @@ export function OverviewView({
             </div>
           </div>
           <button
-            onClick={onOpenVaultModal}
-            className="button button-secondary text-xs h-9 px-3 shrink-0 self-start md:self-auto"
+            onClick={handleConnectWallet}
+            disabled={isConnecting}
+            className="button button-secondary text-xs h-9 px-3 shrink-0 self-start md:self-auto inline-flex items-center gap-1.5 disabled:opacity-60"
           >
-            Manage Vault
+            <Wallet size={14} />
+            {isConnecting ? "Connecting..." : isConnected ? "Change Wallet" : "Connect Wallet"}
           </button>
         </div>
 
+        {connectError && (
+          <div className="mt-5 flex items-center gap-2 text-xs text-amber-700">
+            <AlertCircle size={14} className="shrink-0" />
+            {connectError}
+          </div>
+        )}
+
+        {isConnected && (
         <div className="mt-5 p-4 rounded-lg border border-black/10 bg-neutral-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0"></div>
@@ -89,7 +127,7 @@ export function OverviewView({
                 Active Settlement Address
               </div>
               <div className="font-mono text-xs font-semibold text-black mt-0.5 break-all sm:break-normal">
-                {user.walletAddress || stellarVault}
+                {settlementAddress}
               </div>
             </div>
           </div>
@@ -99,7 +137,7 @@ export function OverviewView({
               NON-CUSTODIAL · ACTIVE
             </span>
             <button
-              onClick={() => copyToClipboard(user.walletAddress || stellarVault, "vault")}
+              onClick={() => copyToClipboard(settlementAddress, "vault")}
               className="p-1.5 rounded hover:bg-black/5 text-neutral-500 hover:text-black transition-colors"
               title="Copy address"
             >
@@ -107,6 +145,7 @@ export function OverviewView({
             </button>
           </div>
         </div>
+        )}
       </div>
 
       {/* 2. Core KPI Metrics Cards */}
