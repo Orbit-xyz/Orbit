@@ -16,6 +16,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { MerchantUser, useAuth } from "@/lib/auth-context";
+import { connectFreighter } from "@/lib/freighter";
 import { DashboardTab, NetworkId, NETWORKS } from "../dashboard-types";
 
 interface OverviewViewProps {
@@ -50,23 +51,13 @@ export function OverviewView({
     setConnectError("");
     setIsConnecting(true);
 
-    const win = typeof window !== "undefined" ? (window as any) : null;
-    let address = "";
-
-    try {
-      if (win?.freighterApi?.getPublicKey) {
-        address = await win.freighterApi.getPublicKey();
-      } else if (win?.freighter?.requestAccess) {
-        address = await win.freighter.requestAccess();
-      } else {
-        setConnectError("Freighter not detected. Install the extension to link a vault.");
-      }
-    } catch (err) {
-      console.warn("Freighter wallet not responding:", err);
-      setConnectError("Freighter rejected the request.");
+    const result = await connectFreighter();
+    if (result.ok) {
+      updateWallet(result.address);
+    } else {
+      setConnectError(result.error);
     }
 
-    if (address) updateWallet(address);
     setIsConnecting(false);
   };
 
