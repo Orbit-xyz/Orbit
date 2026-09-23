@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Menu,
   X,
+  ShieldCheck,
   Globe,
   Wallet,
   Copy,
@@ -30,9 +31,7 @@ import { SubscribersView } from "./views/subscribers-view";
 import { PayrollView } from "./views/payroll-view";
 import { PaymentLinksView } from "./views/payment-links-view";
 import { DevelopersView } from "./views/developers-view";
-import { ConnectWalletModal } from "@/components/wallet/connect-wallet-modal";
-import { useWallet } from "@/lib/use-wallet";
-import { truncateAddress } from "@/lib/utils";
+import { VaultModal } from "./modals/vault-modal";
 
 export function DashboardShell() {
   const router = useRouter();
@@ -46,12 +45,7 @@ export function DashboardShell() {
   const [activeNetwork, setActiveNetwork] = useState<NetworkId>("stellar-testnet");
   const [isNetworkDropdownOpen, setIsNetworkDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
-
-  // Wallet state follows the network switcher, so "Connect Wallet" always offers
-  // the right chain's wallets. EVM and Stellar sessions are held separately —
-  // flipping networks does not disconnect the other rail.
-  const wallet = useWallet(activeNetwork);
+  const [isVaultModalOpen, setIsVaultModalOpen] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [isEditingBusinessName, setIsEditingBusinessName] = useState(false);
   const [businessNameInput, setBusinessNameInput] = useState("");
@@ -247,42 +241,22 @@ export function DashboardShell() {
 
         {/* Sidebar Footer: Linked Vaults Indicator & Sign Out */}
         <div className="p-4 border-t border-black/10 space-y-3">
-          {/* Connect Wallet — offers the wallets for whichever network is active */}
-          {wallet.isConnected ? (
-            <div className="w-full p-2.5 rounded-lg border border-black/10 bg-white">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  {NETWORKS[activeNetwork].name}
-                </span>
-                <button
-                  onClick={() => wallet.disconnectWallet()}
-                  className="text-[10px] font-semibold text-neutral-400 hover:text-black transition-colors"
-                >
-                  Disconnect
-                </button>
-              </div>
-              <div className="text-[11px] font-mono text-black truncate mt-1">
-                {truncateAddress(wallet.address ?? "")}
-              </div>
-              {wallet.isWrongChain && (
-                <button
-                  onClick={() => wallet.ensureCorrectChain()}
-                  className="mt-2 w-full text-[10px] font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-md py-1.5 hover:bg-amber-100 transition-colors"
-                >
-                  Wrong network — switch to Arc
-                </button>
-              )}
+          {/* Linked Vaults Status Pill */}
+          <button
+            onClick={() => setIsVaultModalOpen(true)}
+            className="w-full text-left p-2.5 rounded-lg border border-black/10 hover:border-black/30 bg-neutral-50/60 hover:bg-neutral-50 transition-colors"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider flex items-center gap-1.5">
+                <ShieldCheck size={12} className="text-emerald-600" />
+                Settlement Vault
+              </span>
+              <span className="text-[10px] font-mono text-emerald-600 font-bold">READY</span>
             </div>
-          ) : (
-            <button
-              onClick={() => setIsConnectModalOpen(true)}
-              className="w-full flex items-center justify-center gap-2 p-2.5 rounded-lg bg-black text-white text-xs font-semibold hover:bg-neutral-800 transition-colors"
-            >
-              <Wallet size={14} />
-              Connect Wallet
-            </button>
-          )}
+            <div className="text-[11px] text-neutral-600 truncate mt-1">
+              Non-Custodial USDC Treasury
+            </div>
+          </button>
 
           {/* User Sign Out */}
           <div className="flex items-center justify-between pt-1 text-xs text-neutral-500">
@@ -340,7 +314,7 @@ export function DashboardShell() {
               user={user}
               activeNetwork={activeNetwork}
               onNavigateTab={(tab) => setActiveTab(tab)}
-              onOpenConnectModal={() => setIsConnectModalOpen(true)}
+              onOpenVaultModal={() => setIsVaultModalOpen(true)}
             />
           )}
 
@@ -359,16 +333,12 @@ export function DashboardShell() {
       </div>
 
       {/* Vault Management Modal */}
-      <ConnectWalletModal
-        isOpen={isConnectModalOpen}
-        onClose={() => setIsConnectModalOpen(false)}
-        initialNetwork={activeNetwork}
-        onConnected={(network, address) => {
-          // Record it as that rail's settlement vault so payouts route correctly.
-          updateVault(network === "arc-testnet" ? "arc" : "stellar", address);
-        }}
+      <VaultModal
+        isOpen={isVaultModalOpen}
+        onClose={() => setIsVaultModalOpen(false)}
+        user={user}
+        onUpdateVault={updateVault}
       />
-
     </div>
   );
 }

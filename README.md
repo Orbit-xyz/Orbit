@@ -132,9 +132,7 @@ Located in `packages/checkout-widget`:
 
 ## 4. Deployed Smart Contract Registry
 
-Orbit settles USDC on **two independent rails**. Both are deployed, verified, and operational.
-
-### 4.1 Stellar Testnet — Soroban (Rust / WASM)
+The following contract is deployed, verified, and operational on the Stellar Testnet:
 
 | Parameter | Identifier / Value | Subsystem Role |
 | :--- | :--- | :--- |
@@ -143,28 +141,6 @@ Orbit settles USDC on **two independent rails**. Both are deployed, verified, an
 | **Target Network** | **Stellar Testnet** | High-Throughput Settlement Layer |
 | **Network Passphrase** | `Test SDF Network ; September 2015` | Network Identification |
 | **Soroban RPC URL** | `https://soroban-testnet.stellar.org` | Horizon & RPC Interface |
-
-### 4.2 Arc Testnet — EVM (Solidity)
-
-Arc is Circle's EVM Layer-1 where **USDC is the native gas token**, so settlement and gas
-collapse into a single asset. Source is verified and publicly readable on the explorer.
-
-| Parameter | Identifier / Value | Subsystem Role |
-| :--- | :--- | :--- |
-| **OrbitPuller Address** | [`0x2c0c751e40b89a01309548DaBe7937754447aC92`](https://explorer.testnet.arc.io/address/0x2c0c751e40b89a01309548DaBe7937754447aC92) | Core Settlement & Batch Engine |
-| **Settlement Asset** | USDC (`0x3600000000000000000000000000000000000000`) | Native gas token; satisfies `IERC20` directly |
-| **Token Decimals** | `6` on the ERC-20 interface (`18` on the native view) | See `Docs/Build_Guide.md` Task 6.6 |
-| **Target Network** | **Arc Testnet** | EVM Settlement Layer |
-| **Chain ID** | `5042002` | Network Identification |
-| **Arc RPC URL** | `https://rpc.testnet.arc.io` | JSON-RPC Interface |
-| **Block Explorer** | `https://explorer.testnet.arc.io` | Blockscout, source verified |
-| **Compiler** | `v0.8.24`, optimizer on, 200 runs | Build Reproducibility |
-
-**Live verification (Arc testnet):** two consecutive billing cycles executed end-to-end —
-`createVault` (1 USDC / 60s) → `pullFunds` moved exactly `1_000_000` → an immediate second
-pull reverted with `0xcd23a7eb` (`TooEarlyToPull()`) → after the interval elapsed, the next
-cycle settled exactly `1_000_000`. Cadence and cap enforcement are proven on-chain, not
-only in the test suite.
 
 ---
 

@@ -17,7 +17,7 @@ It’s exhausting, unscalable, and kills the user experience. You simply cannot 
 
 ### Scenario 1: The Automated SaaS Subscription (The Pull)
 * **The Setup:** You build a premium AI developer tool costing 20 USDC/month. David, a developer in Berlin, wants to subscribe to your "Pro Plan."
-* **The Allowance Vault:** David clicks "Subscribe" on your website. Orbit’s checkout widget opens. David connects his wallet (Freighter on Stellar or MetaMask/AppKit on Arc) and signs a smart contract allowance: *"I authorize Orbit to pull up to 20 USDC from my wallet every 30 days."*
+* **The Allowance Vault:** David clicks "Subscribe" on your website. Orbit’s checkout widget opens. David connects his Stellar wallet (Freighter) and signs a smart contract allowance: *"I authorize Orbit to pull up to 20 USDC from my wallet every 30 days."*
 * **The Magic:** From that moment on, David never touches his wallet for this subscription again. Every 30 days, the smart contract verifies the allowance criteria and executes the pull directly into your settlement treasury.
 
 ### Scenario 2: The One-Click Batch Payroll (The Split)
@@ -34,9 +34,8 @@ Orbit is architected as a **multi-chain non-custodial protocol** operating on di
 | Network | Execution Layer | Supported Wallets | Target Use Case |
 | :--- | :--- | :--- | :--- |
 | **Stellar Testnet** | Soroban Rust Smart Contracts | Freighter, Albedo, xBull | Sub-cent transaction fees, instant finality (< 1.5s), micro-subscriptions |
-| **Arc Testnet (EVM)** | Solidity Smart Contracts | MetaMask, AppKit, Coinbase Wallet | Deep EVM ecosystem interoperability, DeFi integrations |
 
-Merchants link **settlement vaults per chain** within a unified dashboard profile, receiving funds automatically without disconnecting/reconnecting wallets.
+Merchants link a **settlement vault** within a unified dashboard profile, receiving funds automatically without disconnecting/reconnecting wallets.
 
 ---
 
@@ -55,7 +54,7 @@ A high-contrast, minimalist merchant dashboard adapting top billing ergonomics (
 
 ### B. The Checkout Widget / SDK (React)
 * Standalone embeddable modal component (`<OrbitCheckout planId="..." />`).
-* Seamless wallet handshake (Freighter / EVM) to authorize recurring on-chain allowances.
+* Seamless wallet handshake (Freighter) to authorize recurring on-chain allowances.
 
 ### C. Smart Contracts
 * **Allowance Vault:** Strictly enforces billing intervals, spending caps, and unauthorized pull protections.
@@ -67,7 +66,7 @@ A high-contrast, minimalist merchant dashboard adapting top billing ergonomics (
 
 To guarantee world-class UX and eliminate unnecessary blockers during development, Orbit follows a **Dashboard-First** sequence:
 1. **Interactive UI & Ergonomics:** Build and review all dashboard modules, modals, and data flows using clean mock states and client-side validation.
-2. **Multi-Wallet Integration:** Integrate wallet connection hooks (Freighter for Stellar, MetaMask/AppKit for Arc) to verify and link multi-chain treasury vaults.
+2. **Wallet Integration:** Integrate wallet connection hooks (Freighter for Stellar) to verify and link treasury vaults.
 3. **Smart Contract Execution:** Connect live testnet smart contracts to trigger on-chain pulls and execute batch payroll transactions.
 
 ---

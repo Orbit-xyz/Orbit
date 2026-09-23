@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { isConnected, requestAccess } from '@stellar/freighter-api';
 import { motion, AnimatePresence } from 'framer-motion';
-import { planAmount, DEFAULT_NETWORK } from './money';
 
-const OrbitCheckout = ({ planId, planData, network = DEFAULT_NETWORK, apiUrl = 'http://localhost:3001' }) => {
+const OrbitCheckout = ({ planId, planData, apiUrl = 'http://localhost:3001' }) => {
     const [plan, setPlan] = useState(planData || null);
     const [loading, setLoading] = useState(!planData);
     const [error, setError] = useState(null);
@@ -44,7 +43,7 @@ const OrbitCheckout = ({ planId, planData, network = DEFAULT_NETWORK, apiUrl = '
                 setPlan({
                     id: planId,
                     name: "Pro Developer Membership",
-                    amount: 49,
+                    usdc_amount: 490000000,
                     interval_seconds: 2592000,
                     merchants: { name: "Drips Labs" }
                 });
@@ -107,10 +106,7 @@ const OrbitCheckout = ({ planId, planData, network = DEFAULT_NETWORK, apiUrl = '
     if (error) return <div style={{ ...styles.container, color: '#ff4444' }}>{error}</div>;
     if (!plan) return <div style={styles.container}>Plan not found.</div>;
 
-    // Amount is a human-readable decimal. Legacy records stored base units and
-    // are converted using that plan's own network decimals — never a hardcoded
-    // divisor, because Stellar uses 7 and Arc uses 6.
-    const displayAmount = planAmount(plan, network).toFixed(2);
+    const displayAmount = (plan.usdc_amount / 10000000).toFixed(2);
 
     return (
         <div style={styles.container}>

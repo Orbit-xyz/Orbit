@@ -1,29 +1,25 @@
 import React, { useState } from 'react';
 import OrbitCheckout from './OrbitCheckout';
-import { planAmount } from './money';
 
 const PRESET_PLANS = [
   {
     id: "plan_pro",
     name: "Pro Developer Membership",
-    amount: 49,
-    network: "arc-testnet",
+    usdc_amount: 490000000,
     interval_seconds: 2592000,
     merchants: { name: "Drips Labs" }
   },
   {
     id: "plan_community",
     name: "Private Alpha Pass",
-    amount: 100,
-    network: "stellar-testnet",
+    usdc_amount: 1000000000,
     interval_seconds: 2592000,
     merchants: { name: "Drips Labs" }
   },
   {
     id: "plan_enterprise",
     name: "Enterprise Node Retainer",
-    amount: 2000,
-    network: "arc-testnet",
+    usdc_amount: 20000000000,
     interval_seconds: 2592000,
     merchants: { name: "Drips Labs" }
   }
@@ -110,7 +106,7 @@ function App() {
               transition: 'all 0.15s ease'
             }}
           >
-            {plan.name} (${planAmount(plan).toFixed(0)}/mo)
+            {plan.name} (${(plan.usdc_amount / 10000000).toFixed(0)}/mo)
           </button>
         ))}
       </div>

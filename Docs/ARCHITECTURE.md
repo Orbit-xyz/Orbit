@@ -191,39 +191,18 @@ Orbit delivers cryptographically signed webhooks to merchant servers for automat
 
 ---
 
-## 7. Multichain Architecture & Linked Settlement Vaults
+## 7. Settlement Vault Architecture
 
-Orbit operates across both high-speed Soroban (Stellar) and EVM (Arc Network) environments. To eliminate the friction of constantly switching or disconnecting wallets, Orbit uses a **Linked Settlement Vault** model:
+Orbit settles on high-speed Soroban (Stellar). To eliminate the friction of constantly switching or disconnecting wallets, Orbit uses a **Linked Settlement Vault** model:
 
 ```text
-MERCHANT MULTI-CHAIN PROFILE
-├── Stellar Soroban Vault  ──>  Freighter / Albedo (GB3X...94QA)  [Active & Verified]
-└── Arc Network Vault      ──>  MetaMask / AppKit  (0x71C...3F29)  [Active & Verified]
+MERCHANT SETTLEMENT PROFILE
+└── Stellar Soroban Vault  ──>  Freighter / Albedo (GB3X...94QA)  [Active & Verified]
 ```
 
-### Deployed Settlement Contracts
-
-| Rail | Contract | Network | Settlement Asset |
-| :--- | :--- | :--- | :--- |
-| Soroban (Rust) | `CAZBZBUWBSQYK2RZ6WHMXVDLIQHSU5WD7ANZYL6HLNSCRUOTNYCDYQNG` | Stellar Testnet | SAC USDC, 7 decimals |
-| EVM (Solidity) | [`0x2c0c751e40b89a01309548DaBe7937754447aC92`](https://explorer.testnet.arc.io/address/0x2c0c751e40b89a01309548DaBe7937754447aC92) | Arc Testnet (chain `5042002`) | USDC `0x3600…0000`, **6 decimals** |
-
-**Two facts that drive implementation work across the stack:**
-
-1. **Decimals differ per rail.** Soroban's SAC USDC uses **7** decimals; Arc's ERC-20 USDC
-   uses **6** (its native gas view uses 18 — always read balances through the ERC-20
-   interface, never the native one). Amounts must be stored rail-agnostically and scaled
-   only at the chain boundary.
-2. **Pull authorization differs per rail.** On Soroban, `pull_funds` requires
-   `merchant.require_auth()`, so only the merchant can trigger a pull — which is why
-   `apps/backend/index.js` currently accepts a `merchant_secret`. On Arc, `pullFunds` uses
-   `msg.sender` as the merchant. Neither rail yet has a delegated keeper role, so automated
-   billing still depends on merchant-held keys. This is the main blocker to a production
-   cron and should be resolved before launch.
-
 ### Key Principles:
-1. **Offline Settlement:** Automated recurring pulls do not require the merchant's wallet to be connected. Funds route on-chain directly to the merchant's registered treasury address for that specific network.
-2. **Persistent Multi-Chain State:** The merchant links their Stellar address and EVM address once. Both remain active concurrently; customers subscribing via Stellar pay to the Stellar vault, while customers on Arc pay to the EVM vault.
-3. **Network-Contextual Actions:** When performing on-chain administrative tasks (such as signing a Batch Payroll disbursement or altering a plan), the dashboard prompts the appropriate wallet provider for that specific chain.
+1. **Offline Settlement:** Automated recurring pulls do not require the merchant's wallet to be connected. Funds route on-chain directly to the merchant's registered treasury address.
+2. **Persistent Vault State:** The merchant links their Stellar address once and it remains active across all subscriptions; customers subscribing via Stellar pay into that vault.
+3. **Contextual Actions:** When performing on-chain administrative tasks (such as signing a Batch Payroll disbursement or altering a plan), the dashboard prompts the merchant's connected wallet provider.
 
 

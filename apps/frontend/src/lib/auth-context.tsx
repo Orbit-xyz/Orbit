@@ -2,11 +2,8 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 
-import { detectAddressChain } from "./utils";
-
 export interface LinkedVaults {
   stellar?: string;
-  arc?: string;
 }
 
 export interface MerchantUser {
@@ -34,7 +31,7 @@ interface AuthContextType {
   ) => Promise<{ success: boolean; error?: string }>;
   signInWithWallet: (walletAddress: string) => Promise<{ success: boolean; error?: string }>;
   updateWallet: (walletAddress: string) => void;
-  updateVault: (chain: "stellar" | "arc", address: string) => void;
+  updateVault: (chain: "stellar", address: string) => void;
   updateBusinessName: (businessName: string) => void;
   signOut: () => void;
 }
@@ -179,25 +176,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateWallet = (walletAddress: string) => {
     if (!user) return;
     const trimmed = walletAddress.trim();
-
-    // Classify by actual address shape, not by first character. An address that
-    // matches neither rail is still recorded as the active wallet, but is NOT
-    // linked as a settlement vault — routing payouts to an unvalidated address
-    // would send them nowhere recoverable.
-    const chain = detectAddressChain(trimmed);
-
     const updated = {
       ...user,
       walletAddress: trimmed,
       linkedVaults: {
         ...user.linkedVaults,
-        ...(chain ? { [chain]: trimmed } : {}),
+        stellar: trimmed,
       },
     };
     saveUserSession(updated);
   };
 
-  const updateVault = (chain: "stellar" | "arc", address: string) => {
+  const updateVault = (chain: "stellar", address: string) => {
     if (!user) return;
     const trimmed = address.trim();
     const updated = {

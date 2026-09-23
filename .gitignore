@@ -19,9 +19,8 @@ dist/
 # Rust / Soroban
 target/
 
-# Foundry / EVM
+# Caches
 cache/
-broadcast/
 .cache/
 
 # Backups & Temporary Directories
