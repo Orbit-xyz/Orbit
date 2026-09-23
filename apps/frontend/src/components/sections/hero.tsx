@@ -17,7 +17,7 @@ export function Hero() {
           className="hero-copy"
         >
           <h1 className="hero-title">
-            Non-custodial pull payment protocol for{" "}
+            Non-custodial pull payment for{" "}
             <Typewriter
               words={["businesses.", "organizations.", "developers."]}
             />
@@ -44,6 +44,11 @@ export function Hero() {
             >
               Explore the protocol <ArrowUpRight size={15} />
             </Link>
+          </div>
+
+          <div className="hero-note">
+            <span className="note-mark" />
+            Built for USDC on Stellar / Soroban testnet
           </div>
         </motion.div>
 
