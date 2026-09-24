@@ -32,6 +32,7 @@ import { PayrollView } from "./views/payroll-view";
 import { PaymentLinksView } from "./views/payment-links-view";
 import { DevelopersView } from "./views/developers-view";
 import { VaultModal } from "./modals/vault-modal";
+import { DOCS_URL } from "@/lib/links";
 
 export function DashboardShell() {
   const router = useRouter();
@@ -294,7 +295,7 @@ export function DashboardShell() {
 
           <div className="flex items-center gap-3">
             <Link
-              href="/docs"
+              href={`${DOCS_URL}/checkout/widget`}
               className="button button-secondary text-xs h-8 px-3 flex items-center gap-1"
             >
               <span>SDK Docs</span>

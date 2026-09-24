@@ -21,6 +21,7 @@ import {
 import Link from "next/link";
 import { ApiKeyRecord } from "../dashboard-types";
 import { CreateApiKeyModal } from "../modals/create-api-key-modal";
+import { DOCS_URL } from "@/lib/links";
 
 const INITIAL_KEYS: ApiKeyRecord[] = [
   {
@@ -165,7 +166,7 @@ print(f"Settled on Stellar: {pull.ledger_hash}")`;
         </div>
 
         <Link
-          href="/docs"
+          href={DOCS_URL}
           className="button button-secondary text-xs h-9 px-3.5 flex items-center gap-1.5 self-start sm:self-auto shrink-0"
         >
           <span>SDK Documentation</span>

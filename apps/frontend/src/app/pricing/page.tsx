@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Check, Plus, Minus } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { DOCS_URL } from "@/lib/links";
 
 const FAQS = [
   {
@@ -129,7 +130,7 @@ export default function PricingPage() {
             </p>
             <Link
               className="button button-secondary button-arrow w-full justify-center"
-              href="/docs"
+              href={DOCS_URL}
               data-testid="pricing-button-talk"
             >
               Read the docs

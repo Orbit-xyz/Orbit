@@ -5,6 +5,7 @@ import { ArrowUpRight } from "lucide-react";
 import { motion } from "framer-motion";
 import { HeroStage } from "./hero-stage";
 import { Typewriter } from "@/components/ui/typewriter";
+import { DOCS_URL } from "@/lib/links";
 
 export function Hero() {
   return (
@@ -39,7 +40,7 @@ export function Hero() {
             </Link>
             <Link
               className="button button-secondary"
-              href="/docs"
+              href={DOCS_URL}
               data-testid="hero-button-docs"
             >
               Explore the protocol <ArrowUpRight size={15} />

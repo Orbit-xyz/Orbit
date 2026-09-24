@@ -10,6 +10,12 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  async redirects() {
+    return [
+      { source: "/docs", destination: "https://orbit-docs-eta.vercel.app", permanent: false },
+      { source: "/docs/:path*", destination: "https://orbit-docs-eta.vercel.app/:path*", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Brand } from "./brand";
+import { DOCS_URL } from "@/lib/links";
 
 export function Footer() {
   const pathname = usePathname();
@@ -32,10 +33,10 @@ export function Footer() {
             </div>
             <div className="footer-column">
               <h3>Resources</h3>
-              <Link href="/docs">Documentation</Link>
-              <Link href="/docs">API Reference</Link>
+              <Link href={DOCS_URL}>Documentation</Link>
+              <Link href={`${DOCS_URL}/api-reference/overview`}>API Reference</Link>
               <Link href="/get-started">Developer Playground</Link>
-              <Link href="/docs">SDK Quickstart</Link>
+              <Link href={`${DOCS_URL}/quickstart`}>SDK Quickstart</Link>
             </div>
             <div className="footer-column">
               <h3>Company</h3>

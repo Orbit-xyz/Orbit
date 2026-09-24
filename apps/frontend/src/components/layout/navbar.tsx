@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 import { Brand } from "./brand";
 import { useAuth } from "@/lib/auth-context";
+import { DOCS_URL } from "@/lib/links";
 
 export function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
@@ -47,8 +48,8 @@ export function Navbar() {
             Pricing
           </Link>
           <Link
-            className={`nav-link ${pathname === "/docs" ? "text-black font-semibold" : ""}`}
-            href="/docs"
+            className="nav-link"
+            href={DOCS_URL}
             data-testid="link-developers"
           >
             Developers
@@ -143,7 +144,7 @@ export function Navbar() {
               </Link>
               <Link
                 className="nav-link text-base py-1"
-                href="/docs"
+                href={DOCS_URL}
                 onClick={closeMenu}
                 data-testid="mobile-link-developers"
               >

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Check, Copy } from "lucide-react";
 import { motion } from "framer-motion";
+import { DOCS_URL } from "@/lib/links";
 
 const CODE_SNIPPET = `// 1. Initialize Orbit SDK with your merchant keys
 import { Orbit } from '@orbit/sdk';
@@ -56,7 +57,7 @@ export function DeveloperSdk() {
           </p>
           <Link
             className="button button-primary button-arrow mt-8"
-            href="/docs"
+            href={`${DOCS_URL}/checkout/widget`}
             data-testid="code-button-docs"
           >
             Explore the SDK
