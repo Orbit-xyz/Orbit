@@ -16,6 +16,7 @@ import {
   Info,
 } from "lucide-react";
 import { Brand } from "@/components/layout/brand";
+import { connectFreighter } from "@/lib/freighter";
 
 interface HostedPlanData {
   id: string;
@@ -86,6 +87,7 @@ export default function HostedCheckoutPage({
   const [linkData, setLinkData] = useState<HostedPlanData | null>(null);
   const [loading, setLoading] = useState(true);
   const [customerAddress, setCustomerAddress] = useState<string | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isCompleted, setIsCompleted] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -127,22 +129,17 @@ export default function HostedCheckoutPage({
   }, [linkId]);
 
   const handleConnectWallet = async () => {
-    // Check if window.freighter is present
-    try {
-      if (typeof window !== "undefined" && (window as any).freighter) {
-        const access = await (window as any).freighter.requestAccess();
-        const addr = typeof access === "string" ? access : access.address;
-        if (addr) {
-          setCustomerAddress(addr);
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn("Freighter popup skipped or not installed, using demo account.", e);
+    setWalletError(null);
+
+    const result = await connectFreighter();
+
+    if (!result.ok) {
+      setCustomerAddress(null);
+      setWalletError(result.error);
+      return;
     }
 
-    // Default to quick demo address for reviewers/judges
-    setCustomerAddress("GBXQ4T7W91LK3PMZ0VR82C5E7NDF6U9H4YJ2A8S");
+    setCustomerAddress(result.address);
   };
 
   const handleAuthorizeCheckout = () => {
@@ -253,8 +250,13 @@ export default function HostedCheckoutPage({
                     <span>Connect Freighter Wallet</span>
                   </button>
                   <p className="text-[11px] text-center text-neutral-400">
-                    Works with Freighter extension or quick demo simulation
+                    Requires the Freighter browser extension
                   </p>
+                  {walletError && (
+                    <p role="alert" className="text-[11px] text-center text-red-600">
+                      {walletError}
+                    </p>
+                  )}
                 </div>
               ) : (
                 /* Step 2: Authorize Allowance */
