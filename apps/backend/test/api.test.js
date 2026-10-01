@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
+import { Keypair, StrKey, Account } from '@stellar/stellar-sdk';
 import app from '../index.js';
 
 describe('Merchant API Route Validation & Responses', () => {
@@ -241,6 +242,90 @@ describe('Merchant API Route Validation & Responses', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('subscription_id');
+    });
+
+    describe('on-chain confirmation', () => {
+      const merchantKeypair = Keypair.random();
+      const contractId = StrKey.encodeContract(Buffer.alloc(32, 1));
+      let mockServer;
+
+      beforeEach(() => {
+        process.env.ORBIT_CONTRACT_ID = contractId;
+        app.locals.txPollIntervalMs = 1;
+        app.locals.txPollTimeoutMs = 20;
+
+        mockSupabase.single.mockImplementation(() => {
+          // First call resolves the subscription, second call resolves the merchant
+          if (mockSupabase.single.mock.calls.length === 1) {
+            return Promise.resolve({
+              data: {
+                id: validSubscriptionId,
+                customer_wallet_address: validStellarAddress,
+                plans: { merchant_id: validMerchantId, usdc_amount: 29, interval_seconds: 2592000 },
+              },
+              error: null,
+            });
+          }
+          return Promise.resolve({
+            data: { wallet_address: merchantKeypair.publicKey() },
+            error: null,
+          });
+        });
+
+        mockServer = {
+          getAccount: vi.fn().mockResolvedValue(new Account(merchantKeypair.publicKey(), '1')),
+          prepareTransaction: vi.fn().mockImplementation(async (tx) => tx),
+          sendTransaction: vi.fn().mockResolvedValue({ status: 'PENDING', hash: 'deadbeef' }),
+          getTransaction: vi.fn(),
+        };
+
+        app.locals.sorobanServer = mockServer;
+      });
+
+      afterEach(() => {
+        delete app.locals.sorobanServer;
+        delete app.locals.txPollIntervalMs;
+        delete app.locals.txPollTimeoutMs;
+        delete process.env.ORBIT_CONTRACT_ID;
+      });
+
+      it('advances next_billing_date only after the transaction is confirmed SUCCESS', async () => {
+        mockServer.getTransaction.mockResolvedValue({ status: 'SUCCESS' });
+
+        const res = await request(app)
+          .post('/trigger-pull')
+          .send({ subscription_id: validSubscriptionId, merchant_secret: merchantKeypair.secret() });
+
+        expect(res.status).toBe(200);
+        expect(res.body.txHash).toBe('deadbeef');
+        expect(mockSupabase.update).toHaveBeenCalledWith(
+          expect.objectContaining({ next_billing_date: expect.any(String) })
+        );
+      });
+
+      it('marks the subscription past_due and returns an error when the transaction fails', async () => {
+        mockServer.getTransaction.mockResolvedValue({ status: 'FAILED' });
+
+        const res = await request(app)
+          .post('/trigger-pull')
+          .send({ subscription_id: validSubscriptionId, merchant_secret: merchantKeypair.secret() });
+
+        expect(res.status).toBe(502);
+        expect(res.body.txHash).toBe('deadbeef');
+        expect(mockSupabase.update).toHaveBeenCalledWith({ status: 'past_due' });
+      });
+
+      it('returns 202 with the hash when confirmation times out', async () => {
+        mockServer.getTransaction.mockResolvedValue({ status: 'NOT_FOUND' });
+
+        const res = await request(app)
+          .post('/trigger-pull')
+          .send({ subscription_id: validSubscriptionId, merchant_secret: merchantKeypair.secret() });
+
+        expect(res.status).toBe(202);
+        expect(res.body.txHash).toBe('deadbeef');
+        expect(mockSupabase.update).not.toHaveBeenCalled();
+      });
     });
   });
 });

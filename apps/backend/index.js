@@ -19,6 +19,28 @@ if (supabaseUrl && supabaseKey) {
 
 const getSupabase = () => app.locals.supabase || defaultSupabase;
 
+// Allows tests to inject a mock Soroban RPC server instead of hitting testnet
+const getSorobanServer = (rpcUrl) => app.locals.sorobanServer || new rpc.Server(rpcUrl);
+
+// How long to keep polling getTransaction() for a submitted hash before giving up
+const TX_POLL_TIMEOUT_MS = Number(process.env.TX_POLL_TIMEOUT_MS) || 30000;
+const TX_POLL_INTERVAL_MS = Number(process.env.TX_POLL_INTERVAL_MS) || 1000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Polls getTransaction(hash) until it settles to SUCCESS/FAILED, or returns NOT_FOUND on timeout
+const waitForTransaction = async (server, hash, { timeoutMs = TX_POLL_TIMEOUT_MS, intervalMs = TX_POLL_INTERVAL_MS } = {}) => {
+    const deadline = Date.now() + timeoutMs;
+    let lastResponse = await server.getTransaction(hash);
+
+    while (lastResponse.status === "NOT_FOUND" && Date.now() < deadline) {
+        await sleep(intervalMs);
+        lastResponse = await server.getTransaction(hash);
+    }
+
+    return lastResponse;
+};
+
 // ==========================================
 // VALIDATION SCHEMAS
 // ==========================================
@@ -205,7 +227,7 @@ app.post('/trigger-pull', async (req, res) => {
         }
 
         const rpcUrl = process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
-        const server = new rpc.Server(rpcUrl);
+        const server = getSorobanServer(rpcUrl);
         const contract = new Contract(ORBIT_CONTRACT_ID);
         
         // 3. Build the Soroban Transaction
@@ -227,24 +249,51 @@ app.post('/trigger-pull', async (req, res) => {
         preparedTx.sign(merchantKeypair);
 
         console.log("Submitting 'pull_funds' to Soroban testnet...");
-        let txResponse = await server.sendTransaction(preparedTx);
-        
-        if (txResponse.status !== "PENDING" && txResponse.status !== "SUCCESS") {
-             throw new Error(`Transaction failed: ${JSON.stringify(txResponse)}`);
+        const submitResponse = await server.sendTransaction(preparedTx);
+
+        if (submitResponse.status !== "PENDING" && submitResponse.status !== "SUCCESS") {
+             throw new Error(`Transaction submission failed: ${JSON.stringify(submitResponse)}`);
         }
 
-        // 5. Update next_billing_date in database
-        const pullTime = new Date();
-        const nextBilling = new Date(pullTime.getTime() + Number(sub.plans.interval_seconds) * 1000);
+        const txHash = submitResponse.hash;
 
-        await supabase
-            .from('subscriptions')
-            .update({ next_billing_date: nextBilling.toISOString() })
-            .eq('id', subscription_id);
+        // 5. Confirm the transaction actually landed before touching billing state
+        const confirmation = await waitForTransaction(server, txHash, {
+            timeoutMs: app.locals.txPollTimeoutMs ?? TX_POLL_TIMEOUT_MS,
+            intervalMs: app.locals.txPollIntervalMs ?? TX_POLL_INTERVAL_MS,
+        });
 
-        res.status(200).json({ 
-            message: "Successfully pulled funds on-chain!", 
-            txHash: txResponse.hash 
+        if (confirmation.status === "SUCCESS") {
+            const pullTime = new Date();
+            const nextBilling = new Date(pullTime.getTime() + Number(sub.plans.interval_seconds) * 1000);
+
+            await supabase
+                .from('subscriptions')
+                .update({ next_billing_date: nextBilling.toISOString() })
+                .eq('id', subscription_id);
+
+            return res.status(200).json({
+                message: "Successfully pulled funds on-chain!",
+                txHash,
+            });
+        }
+
+        if (confirmation.status === "FAILED") {
+            await supabase
+                .from('subscriptions')
+                .update({ status: 'past_due' })
+                .eq('id', subscription_id);
+
+            return res.status(502).json({
+                error: "Transaction failed on-chain",
+                txHash,
+            });
+        }
+
+        // Still NOT_FOUND after the timeout: outcome unknown, let the caller poll later
+        return res.status(202).json({
+            message: "Transaction submitted but not yet confirmed; check back later",
+            txHash,
         });
 
     } catch (err) {
