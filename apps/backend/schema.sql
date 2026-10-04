@@ -34,18 +34,33 @@ CREATE TABLE subscriptions (
     UNIQUE(plan_id, customer_wallet_address)
 );
 
--- Enable Row Level Security (RLS) for good practice
+-- ==============================================================================
+-- Row Level Security (RLS) Configuration
+-- ==============================================================================
+--
+-- Security Model:
+-- 1. The backend Express API connects using SUPABASE_SERVICE_ROLE_KEY, which
+--    inherently bypasses RLS in PostgreSQL / Supabase.
+-- 2. Direct client access using the public anon key is strictly read-only and
+--    limited to what the public checkout flow requires (reading plans and
+--    associated merchant names and wallet addresses).
+-- 3. All table mutations (INSERT, UPDATE, DELETE) across all tables are forbidden
+--    to anon/public clients and must be executed through the backend.
+-- 4. The subscriptions table has NO public policies defined, enforcing default-deny
+--    for the anon key (preventing any direct listing or modification of subscriber data).
+
 ALTER TABLE merchants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
 
--- Create basic open policies so our Express API can easily read/write during development
-CREATE POLICY "Enable read access for all users" ON merchants FOR SELECT USING (true);
-CREATE POLICY "Enable insert access for all users" ON merchants FOR INSERT WITH CHECK (true);
+-- Public checkout read access for plans and merchant public identifiers
+CREATE POLICY "Allow public read access to merchants for checkout"
+    ON merchants FOR SELECT
+    USING (true);
 
-CREATE POLICY "Enable read access for all users" ON plans FOR SELECT USING (true);
-CREATE POLICY "Enable insert access for all users" ON plans FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public read access to plans for checkout"
+    ON plans FOR SELECT
+    USING (true);
 
-CREATE POLICY "Enable read access for all users" ON subscriptions FOR SELECT USING (true);
-CREATE POLICY "Enable insert access for all users" ON subscriptions FOR INSERT WITH CHECK (true);
-CREATE POLICY "Enable update access for all users" ON subscriptions FOR UPDATE USING (true);
+-- No public policies for subscriptions: default-deny prevents anon key access.
+-- No open INSERT or UPDATE policies: all mutations require backend service role.
