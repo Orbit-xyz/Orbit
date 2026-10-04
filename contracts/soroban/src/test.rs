@@ -459,3 +459,85 @@ fn test_get_vault_returns_existing_vault_and_latest_pull_timestamp() {
 
     assert_eq!(after_second_pull.last_pull_timestamp, 1000 + interval);
 }
+
+// ----------------------------------------------------------------------------
+// ISSUE #23: VAULT & CONTRACT INSTANCE STORAGE TTL EXTENSION
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_calculate_ttl_params_logic() {
+    // 1. Short interval (e.g. 1 day = 86,400s -> ~17,280 ledgers)
+    // 17,280 + 120,960 = 138,240, which is below MIN_TTL_LEDGERS (518,400).
+    // It should be floored at MIN_TTL_LEDGERS.
+    let (short_threshold, short_extend_to) = calculate_ttl_params(86_400);
+    assert_eq!(short_extend_to, MIN_TTL_LEDGERS);
+    assert_eq!(short_threshold, TTL_THRESHOLD_LEDGERS);
+
+    // 2. Long interval (e.g. 1 year = 31,536,000s -> 6,307,200 ledgers)
+    // 6,307,200 + 120,960 = 6,428,160 ledgers.
+    let yearly_seconds = 365 * 24 * 60 * 60;
+    let (yearly_threshold, yearly_extend_to) = calculate_ttl_params(yearly_seconds);
+    assert_eq!(
+        yearly_extend_to,
+        (yearly_seconds / SECONDS_PER_LEDGER) as u32 + TTL_MARGIN_LEDGERS
+    );
+    assert_eq!(yearly_threshold, TTL_THRESHOLD_LEDGERS);
+}
+
+#[test]
+fn test_vault_ttl_extended_and_survives_past_default_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&user, &100_0000000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    let amount = 29_0000000;
+    let interval = 30 * 24 * 60 * 60; // 30 days = 2,592,000s (~518,400 ledgers)
+
+    token_client.approve(&user, &orbit_client.address, &100_0000000, &2000000);
+
+    // 1. Create vault: extends persistent & instance TTL
+    orbit_client.create_vault(&user, &merchant, &token_address, &amount, &interval);
+
+    // Initial sequence is typically 0, and default unextended TTL is 4,096 ledgers.
+    // Advance ledger sequence by 10,000 ledgers (well past default TTL 4,096)
+    // and advance timestamp past interval (e.g. 10,000 ledgers * 5s = 50,000s, but interval is 2,592,000s).
+    let initial_seq = env.ledger().sequence();
+    let advanced_seq = initial_seq + 10_000; // Past default 4,096 TTL
+    let advanced_time = interval + 100; // Past interval
+
+    env.ledger().set_sequence_number(advanced_seq);
+    env.ledger().set_timestamp(advanced_time);
+
+    // 2. The vault must still exist in storage and pull_funds must succeed!
+    orbit_client.pull_funds(&user, &merchant);
+
+    assert_eq!(token_client.balance(&merchant), amount);
+    assert_eq!(token_client.balance(&user), 100_0000000 - amount);
+
+    // 3. Verify that pull_funds also extended TTL, allowing a second pull further in time
+    let second_advanced_seq = advanced_seq + 10_000;
+    let second_advanced_time = advanced_time + interval + 100;
+
+    env.ledger().set_sequence_number(second_advanced_seq);
+    env.ledger().set_timestamp(second_advanced_time);
+
+    orbit_client.pull_funds(&user, &merchant);
+
+    assert_eq!(token_client.balance(&merchant), amount * 2);
+    assert_eq!(token_client.balance(&user), 100_0000000 - (amount * 2));
+}
+
