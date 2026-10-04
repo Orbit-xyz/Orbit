@@ -162,6 +162,12 @@ impl OrbitContract {
         // The sender (e.g., the Agency Owner) MUST sign this transaction to approve the payroll.
         sender.require_auth();
 
+        assert!(!splits.is_empty(), "splits must not be empty");
+
+        for split in splits.iter() {
+            assert!(split.amount > 0, "split amount must be positive");
+        }
+
         let token_client = token::Client::new(&env, &token);
 
         // Loop through the array of contractors and amounts

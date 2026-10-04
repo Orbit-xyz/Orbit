@@ -491,6 +491,33 @@ fn test_vault_ttl_extended_and_survives_past_default_ttl() {
 
     let user = Address::generate(&env);
     let merchant = Address::generate(&env);
+// ISSUE #22: VALIDATE SPLITS IN BATCH_DISBURSE
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_batch_disburse_fails_when_splits_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let sender = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    let splits = Vec::new(&env);
+    let res = orbit_client.try_batch_disburse(&sender, &token, &splits);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_batch_disburse_fails_when_split_amount_zero_and_no_recipient_paid() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let sender = Address::generate(&env);
+    let recipient_1 = Address::generate(&env);
+    let recipient_2 = Address::generate(&env);
     let token_admin = Address::generate(&env);
 
     let token_address = env
@@ -500,6 +527,7 @@ fn test_vault_ttl_extended_and_survives_past_default_ttl() {
     let token_admin_client = StellarAssetClient::new(&env, &token_address);
 
     token_admin_client.mint(&user, &100_0000000);
+    token_admin_client.mint(&sender, &100_0000000);
 
     let contract_id = env.register(OrbitContract, ());
     let orbit_client = OrbitContractClient::new(&env, &contract_id);
@@ -541,3 +569,67 @@ fn test_vault_ttl_extended_and_survives_past_default_ttl() {
     assert_eq!(token_client.balance(&user), 100_0000000 - (amount * 2));
 }
 
+    token_client.approve(&sender, &orbit_client.address, &100_0000000, &2000000);
+
+    let mut splits = Vec::new(&env);
+    // First split is positive, second split is zero
+    splits.push_back(PaymentSplit {
+        recipient: recipient_1.clone(),
+        amount: 25_0000000,
+    });
+    splits.push_back(PaymentSplit {
+        recipient: recipient_2.clone(),
+        amount: 0,
+    });
+
+    let res = orbit_client.try_batch_disburse(&sender, &token_address, &splits);
+    assert!(res.is_err());
+
+    // Upfront validation ensures zero transfers took place
+    assert_eq!(token_client.balance(&recipient_1), 0);
+    assert_eq!(token_client.balance(&recipient_2), 0);
+    assert_eq!(token_client.balance(&sender), 100_0000000);
+}
+
+#[test]
+fn test_batch_disburse_fails_when_split_amount_negative_and_no_recipient_paid() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let sender = Address::generate(&env);
+    let recipient_1 = Address::generate(&env);
+    let recipient_2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&sender, &100_0000000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    token_client.approve(&sender, &orbit_client.address, &100_0000000, &2000000);
+
+    let mut splits = Vec::new(&env);
+    // First split is positive, second split is negative
+    splits.push_back(PaymentSplit {
+        recipient: recipient_1.clone(),
+        amount: 30_0000000,
+    });
+    splits.push_back(PaymentSplit {
+        recipient: recipient_2.clone(),
+        amount: -10_0000000,
+    });
+
+    let res = orbit_client.try_batch_disburse(&sender, &token_address, &splits);
+    assert!(res.is_err());
+
+    // Upfront validation ensures zero transfers took place
+    assert_eq!(token_client.balance(&recipient_1), 0);
+    assert_eq!(token_client.balance(&recipient_2), 0);
+    assert_eq!(token_client.balance(&sender), 100_0000000);
+}
