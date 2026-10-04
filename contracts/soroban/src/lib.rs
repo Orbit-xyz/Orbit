@@ -1,6 +1,7 @@
 #![no_std]
+#![allow(deprecated)]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol, Vec};
 
 // ----------------------------------------------------------------------------
 // CONSTANTS: STATE ARCHIVAL & TTL MANAGEMENT
@@ -93,7 +94,7 @@ impl OrbitContract {
         };
 
         let vault_data = VaultData {
-            token,
+            token: token.clone(),
             amount_per_interval,
             interval_seconds,
             last_pull_timestamp: 0,
@@ -101,6 +102,11 @@ impl OrbitContract {
 
         env.storage().persistent().set(&key, &vault_data);
 
+        // Emit contract event
+        env.events().publish(
+            (Symbol::new(&env, "vault_created"), user, merchant),
+            (token, amount_per_interval, interval_seconds),
+        );
         // Extend vault storage TTL and contract instance TTL to prevent archival
         let (threshold, extend_to) = calculate_ttl_params(interval_seconds);
         env.storage().persistent().extend_ttl(&key, threshold, extend_to);
@@ -149,6 +155,11 @@ impl OrbitContract {
         vault.last_pull_timestamp = current_time;
         env.storage().persistent().set(&key, &vault);
 
+        // Emit contract event
+        env.events().publish(
+            (Symbol::new(&env, "funds_pulled"), user, merchant),
+            (vault.amount_per_interval, current_time),
+        );
         // Extend TTL on each pull for both the vault entry and the contract instance
         let (threshold, extend_to) = calculate_ttl_params(vault.interval_seconds);
         env.storage().persistent().extend_ttl(&key, threshold, extend_to);
@@ -169,9 +180,15 @@ impl OrbitContract {
         }
 
         let token_client = token::Client::new(&env, &token);
+        let recipient_count = splits.len();
+        let mut total_amount: i128 = 0;
 
         // Loop through the array of contractors and amounts
         for split in splits.into_iter() {
+            total_amount = total_amount
+                .checked_add(split.amount)
+                .expect("Total amount overflow");
+
             // Transfer the exact cut directly from the sender's wallet to the contractor
             token_client.transfer_from(
                 &env.current_contract_address(),
@@ -180,6 +197,12 @@ impl OrbitContract {
                 &split.amount,
             );
         }
+
+        // Emit contract event
+        env.events().publish(
+            (Symbol::new(&env, "batch_disbursed"), sender),
+            (token, recipient_count, total_amount),
+        );
     }
 }
 

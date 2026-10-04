@@ -2,10 +2,10 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::Client as TokenClient,
     token::StellarAssetClient,
-    Address, Env, IntoVal, Vec,
+    Address, Env, IntoVal, Symbol, Vec,
 };
 
 #[test]
@@ -491,6 +491,54 @@ fn test_vault_ttl_extended_and_survives_past_default_ttl() {
 
     let user = Address::generate(&env);
     let merchant = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&user, &100_0000000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    let amount = 29_0000000;
+    let interval = 30 * 24 * 60 * 60; // 30 days = 2,592,000s (~518,400 ledgers)
+
+    token_client.approve(&user, &orbit_client.address, &100_0000000, &2000000);
+
+    // 1. Create vault: extends persistent & instance TTL
+    orbit_client.create_vault(&user, &merchant, &token_address, &amount, &interval);
+
+    let initial_seq = env.ledger().sequence();
+    let advanced_seq = initial_seq + 10_000; // Past default 4,096 TTL
+    let advanced_time = interval + 100; // Past interval
+
+    env.ledger().set_sequence_number(advanced_seq);
+    env.ledger().set_timestamp(advanced_time);
+
+    // 2. The vault must still exist in storage and pull_funds must succeed!
+    orbit_client.pull_funds(&user, &merchant);
+
+    assert_eq!(token_client.balance(&merchant), amount);
+    assert_eq!(token_client.balance(&user), 100_0000000 - amount);
+
+    // 3. Verify that pull_funds also extended TTL, allowing a second pull further in time
+    let second_advanced_seq = advanced_seq + 10_000;
+    let second_advanced_time = advanced_time + interval + 100;
+
+    env.ledger().set_sequence_number(second_advanced_seq);
+    env.ledger().set_timestamp(second_advanced_time);
+
+    orbit_client.pull_funds(&user, &merchant);
+
+    assert_eq!(token_client.balance(&merchant), amount * 2);
+    assert_eq!(token_client.balance(&user), 100_0000000 - (amount * 2));
+}
+
+// ----------------------------------------------------------------------------
 // ISSUE #22: VALIDATE SPLITS IN BATCH_DISBURSE
 // ----------------------------------------------------------------------------
 
@@ -526,48 +574,10 @@ fn test_batch_disburse_fails_when_split_amount_zero_and_no_recipient_paid() {
     let token_client = TokenClient::new(&env, &token_address);
     let token_admin_client = StellarAssetClient::new(&env, &token_address);
 
-    token_admin_client.mint(&user, &100_0000000);
     token_admin_client.mint(&sender, &100_0000000);
 
     let contract_id = env.register(OrbitContract, ());
     let orbit_client = OrbitContractClient::new(&env, &contract_id);
-
-    let amount = 29_0000000;
-    let interval = 30 * 24 * 60 * 60; // 30 days = 2,592,000s (~518,400 ledgers)
-
-    token_client.approve(&user, &orbit_client.address, &100_0000000, &2000000);
-
-    // 1. Create vault: extends persistent & instance TTL
-    orbit_client.create_vault(&user, &merchant, &token_address, &amount, &interval);
-
-    // Initial sequence is typically 0, and default unextended TTL is 4,096 ledgers.
-    // Advance ledger sequence by 10,000 ledgers (well past default TTL 4,096)
-    // and advance timestamp past interval (e.g. 10,000 ledgers * 5s = 50,000s, but interval is 2,592,000s).
-    let initial_seq = env.ledger().sequence();
-    let advanced_seq = initial_seq + 10_000; // Past default 4,096 TTL
-    let advanced_time = interval + 100; // Past interval
-
-    env.ledger().set_sequence_number(advanced_seq);
-    env.ledger().set_timestamp(advanced_time);
-
-    // 2. The vault must still exist in storage and pull_funds must succeed!
-    orbit_client.pull_funds(&user, &merchant);
-
-    assert_eq!(token_client.balance(&merchant), amount);
-    assert_eq!(token_client.balance(&user), 100_0000000 - amount);
-
-    // 3. Verify that pull_funds also extended TTL, allowing a second pull further in time
-    let second_advanced_seq = advanced_seq + 10_000;
-    let second_advanced_time = advanced_time + interval + 100;
-
-    env.ledger().set_sequence_number(second_advanced_seq);
-    env.ledger().set_timestamp(second_advanced_time);
-
-    orbit_client.pull_funds(&user, &merchant);
-
-    assert_eq!(token_client.balance(&merchant), amount * 2);
-    assert_eq!(token_client.balance(&user), 100_0000000 - (amount * 2));
-}
 
     token_client.approve(&sender, &orbit_client.address, &100_0000000, &2000000);
 
@@ -633,3 +643,105 @@ fn test_batch_disburse_fails_when_split_amount_negative_and_no_recipient_paid() 
     assert_eq!(token_client.balance(&recipient_2), 0);
     assert_eq!(token_client.balance(&sender), 100_0000000);
 }
+
+// ----------------------------------------------------------------------------
+// ISSUE #20: EMIT EVENTS FOR CONTRACT ENTRYPOINTS
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_contract_events_published_for_all_entrypoints() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&user, &100_0000000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    let amount = 29_0000000;
+    let interval = 86400;
+
+    token_client.approve(&user, &orbit_client.address, &100_0000000, &2000000);
+
+    // 1. Verify create_vault event
+    orbit_client.create_vault(&user, &merchant, &token_address, &amount, &interval);
+
+    let create_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "vault_created").to_val(),
+        user.to_val(),
+        merchant.to_val(),
+    ];
+    let create_data = (token_address.clone(), amount, interval).into_val(&env);
+    let expected_create = soroban_sdk::vec![
+        &env,
+        (orbit_client.address.clone(), create_topics, create_data),
+    ];
+    assert_eq!(env.events().all(), expected_create);
+
+    // 2. Verify pull_funds event
+    env.ledger().set_timestamp(5000);
+    orbit_client.pull_funds(&user, &merchant);
+
+    let pull_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "funds_pulled").to_val(),
+        user.clone().to_val(),
+        merchant.clone().to_val(),
+    ];
+    let pull_data = (amount, 5000u64).into_val(&env);
+    let expected_pull = soroban_sdk::vec![
+        &env,
+        (orbit_client.address.clone(), pull_topics, pull_data),
+    ];
+    assert_eq!(
+        env.events().all().filter_by_contract(&orbit_client.address),
+        expected_pull
+    );
+
+    // 3. Verify batch_disburse event
+    let sender = Address::generate(&env);
+    let rec1 = Address::generate(&env);
+    let rec2 = Address::generate(&env);
+
+    token_admin_client.mint(&sender, &50_0000000);
+    token_client.approve(&sender, &orbit_client.address, &50_0000000, &2000000);
+
+    let mut splits = Vec::new(&env);
+    splits.push_back(PaymentSplit {
+        recipient: rec1,
+        amount: 15_0000000,
+    });
+    splits.push_back(PaymentSplit {
+        recipient: rec2,
+        amount: 25_0000000,
+    });
+
+    orbit_client.batch_disburse(&sender, &token_address, &splits);
+
+    let disburse_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "batch_disbursed").to_val(),
+        sender.clone().to_val(),
+    ];
+    let disburse_data = (token_address.clone(), 2u32, 40_0000000i128).into_val(&env);
+    let expected_disburse = soroban_sdk::vec![
+        &env,
+        (orbit_client.address.clone(), disburse_topics, disburse_data),
+    ];
+    assert_eq!(
+        env.events().all().filter_by_contract(&orbit_client.address),
+        expected_disburse
+    );
+}
+
