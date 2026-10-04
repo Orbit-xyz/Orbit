@@ -178,6 +178,7 @@ stellar contract invoke \
 ### Run the App
 
 ```bash
+cp apps/frontend/.env.example apps/frontend/.env.local # configure NEXT_PUBLIC_ORBIT_API_URL
 npm --prefix apps/frontend install
 npm run dev              # Merchant Control Center on http://localhost:3000
 npm run typecheck

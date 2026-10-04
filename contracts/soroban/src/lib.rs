@@ -4,6 +4,34 @@
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol, Vec};
 
 // ----------------------------------------------------------------------------
+// CONSTANTS: STATE ARCHIVAL & TTL MANAGEMENT
+// ----------------------------------------------------------------------------
+
+/// Approximate duration of one Stellar ledger in seconds (~5 seconds per ledger).
+pub const SECONDS_PER_LEDGER: u64 = 5;
+
+/// Safety margin added to interval ledgers (approx. 7 days = 120,960 ledgers)
+/// to ensure vaults remain active even if automated pulls are delayed.
+pub const TTL_MARGIN_LEDGERS: u32 = 120_960;
+
+/// Base minimum TTL duration in ledgers (approx. 30 days = 518,400 ledgers).
+pub const MIN_TTL_LEDGERS: u32 = 518_400;
+
+/// Threshold in ledgers below which TTL will be extended (approx. 7 days = 120,960 ledgers).
+pub const TTL_THRESHOLD_LEDGERS: u32 = 120_960;
+
+/// Calculates (threshold, extend_to) in ledgers for vault persistent storage
+/// and contract instance storage based on interval_seconds.
+pub fn calculate_ttl_params(interval_seconds: u64) -> (u32, u32) {
+    let interval_ledgers = (interval_seconds / SECONDS_PER_LEDGER) as u32;
+    let extend_to = interval_ledgers
+        .saturating_add(TTL_MARGIN_LEDGERS)
+        .max(MIN_TTL_LEDGERS);
+    let threshold = TTL_THRESHOLD_LEDGERS.min(extend_to.saturating_sub(1));
+    (threshold, extend_to)
+}
+
+// ----------------------------------------------------------------------------
 // DATA STRUCTURES
 // ----------------------------------------------------------------------------
 
@@ -79,6 +107,10 @@ impl OrbitContract {
             (Symbol::new(&env, "vault_created"), user, merchant),
             (token, amount_per_interval, interval_seconds),
         );
+        // Extend vault storage TTL and contract instance TTL to prevent archival
+        let (threshold, extend_to) = calculate_ttl_params(interval_seconds);
+        env.storage().persistent().extend_ttl(&key, threshold, extend_to);
+        env.storage().instance().extend_ttl(threshold, extend_to);
     }
 
     /// Read the current terms for a user/merchant vault.
@@ -128,6 +160,10 @@ impl OrbitContract {
             (Symbol::new(&env, "funds_pulled"), user, merchant),
             (vault.amount_per_interval, current_time),
         );
+        // Extend TTL on each pull for both the vault entry and the contract instance
+        let (threshold, extend_to) = calculate_ttl_params(vault.interval_seconds);
+        env.storage().persistent().extend_ttl(&key, threshold, extend_to);
+        env.storage().instance().extend_ttl(threshold, extend_to);
     }
 
     /// 3. THE SPLIT (Batch Payroll Disbursement)
@@ -136,6 +172,12 @@ impl OrbitContract {
     pub fn batch_disburse(env: Env, sender: Address, token: Address, splits: Vec<PaymentSplit>) {
         // The sender (e.g., the Agency Owner) MUST sign this transaction to approve the payroll.
         sender.require_auth();
+
+        assert!(!splits.is_empty(), "splits must not be empty");
+
+        for split in splits.iter() {
+            assert!(split.amount > 0, "split amount must be positive");
+        }
 
         let token_client = token::Client::new(&env, &token);
         let recipient_count = splits.len();

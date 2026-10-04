@@ -1,25 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Users,
   Search,
   CheckCircle2,
   Clock,
-  ArrowDownRight,
   ExternalLink,
   Copy,
   Check,
   Zap,
   ShieldCheck,
-  Play,
   RotateCw,
   AlertCircle,
-  Filter,
+  Database,
+  Radio,
+  RefreshCw,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 import { SubscriberRecord } from "../dashboard-types";
+import {
+  fetchSubscribers,
+  mapApiSubscriberToRecord,
+  ORBIT_API_URL,
+} from "@/lib/api";
 
-const INITIAL_SUBSCRIBERS: SubscriberRecord[] = [
+export const INITIAL_SUBSCRIBERS: SubscriberRecord[] = [
   {
     id: "sub_bob_9421",
     walletAddress: "GBOBZ7M5W8Y2K6T1R9P0V4N8D2L7C3F9A1H5J8K2",
@@ -83,13 +89,63 @@ const INITIAL_SUBSCRIBERS: SubscriberRecord[] = [
 ];
 
 export function SubscribersView() {
-  const [subscribers, setSubscribers] = useState<SubscriberRecord[]>(INITIAL_SUBSCRIBERS);
+  const { user } = useAuth();
+  const [subscribers, setSubscribers] = useState<SubscriberRecord[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Demo mode flag: default to true if env flag is set or no user logged in
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("demo") === "true") return true;
+      if (params.get("demo") === "false") return false;
+    }
+    return process.env.NEXT_PUBLIC_DEMO_MODE === "true" || !user?.id;
+  });
+
   const [searchQuery, setSearchQuery] = useState("");
   const [filterTab, setFilterTab] = useState<"all" | "pending_pull" | "active">("all");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [executingPullId, setExecutingPullId] = useState<string | null>(null);
   const [pullSuccessMessage, setPullSuccessMessage] = useState<string | null>(null);
   const [isBatchPulling, setIsBatchPulling] = useState(false);
+
+  // Load subscribers from Merchant API or fallback to Demo Data
+  const loadSubscribers = useCallback(async () => {
+    if (isDemoMode) {
+      setSubscribers(INITIAL_SUBSCRIBERS);
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
+    if (!user?.id) {
+      // If no signed-in merchant, show demo data gracefully
+      setSubscribers(INITIAL_SUBSCRIBERS);
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const items = await fetchSubscribers(user.id);
+      const mapped = items.map(mapApiSubscriberToRecord);
+      setSubscribers(mapped);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to connect to Orbit Merchant API";
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isDemoMode, user?.id]);
+
+  useEffect(() => {
+    loadSubscribers();
+  }, [loadSubscribers]);
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -102,7 +158,6 @@ export function SubscribersView() {
     setExecutingPullId(sub.id);
     setPullSuccessMessage(null);
 
-    // Simulate 1.2s Soroban ledger execution
     setTimeout(() => {
       setSubscribers((prev) =>
         prev.map((s) => {
@@ -176,36 +231,83 @@ export function SubscribersView() {
 
   return (
     <div className="space-y-6">
-      {/* 1. Header with Batch Action */}
+      {/* 1. Header with Batch Action and Demo Mode Toggle */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
         <div>
-          <h2 className="text-xl font-bold tracking-tight text-black">
-            Subscribers &amp; Allowance Vaults
-          </h2>
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-xl font-bold tracking-tight text-black">
+              Subscribers &amp; Allowance Vaults
+            </h2>
+            {isDemoMode ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-mono font-medium">
+                <Radio size={10} className="text-amber-500 animate-pulse" />
+                DEMO DATA
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-mono font-medium">
+                <Database size={10} className="text-emerald-500" />
+                LIVE API
+              </span>
+            )}
+          </div>
           <p className="text-xs text-neutral-500 mt-0.5">
             Verified on-chain customer vaults authorizing recurring USDC pull payments on Stellar Soroban.
           </p>
         </div>
 
-        {dueCount > 0 && (
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+          {/* Toggle between Live and Demo data */}
           <button
-            onClick={handleBatchPullDue}
-            disabled={isBatchPulling}
-            className="button button-primary text-xs h-9 px-4 flex items-center gap-2 self-start sm:self-auto shrink-0 shadow-xs"
+            onClick={() => setIsDemoMode((prev) => !prev)}
+            className="text-[11px] h-9 px-3 rounded-lg border border-black/10 bg-white hover:bg-neutral-50 text-neutral-600 hover:text-black font-medium inline-flex items-center gap-1.5 transition-colors shadow-2xs"
+            title="Toggle between live Supabase API and demo mock data"
           >
-            {isBatchPulling ? (
+            {isDemoMode ? (
               <>
-                <RotateCw size={13} className="animate-spin" />
-                <span>Executing Batch Pull...</span>
+                <Database size={12} className="text-neutral-500" />
+                <span>Switch to Live API</span>
               </>
             ) : (
               <>
-                <Zap size={13} className="text-emerald-400" />
-                <span>Execute All Due Pulls ({dueCount})</span>
+                <Radio size={12} className="text-amber-500" />
+                <span>Switch to Demo Data</span>
               </>
             )}
           </button>
-        )}
+
+          {/* Refresh button */}
+          {!isDemoMode && (
+            <button
+              onClick={loadSubscribers}
+              disabled={isLoading}
+              className="button button-secondary text-xs h-9 px-3 flex items-center gap-1.5 shadow-2xs"
+              title="Refresh subscribers from API"
+            >
+              <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          )}
+
+          {dueCount > 0 && (
+            <button
+              onClick={handleBatchPullDue}
+              disabled={isBatchPulling}
+              className="button button-primary text-xs h-9 px-4 flex items-center gap-2 shrink-0 shadow-xs"
+            >
+              {isBatchPulling ? (
+                <>
+                  <RotateCw size={13} className="animate-spin" />
+                  <span>Executing Batch Pull...</span>
+                </>
+              ) : (
+                <>
+                  <Zap size={13} className="text-emerald-400" />
+                  <span>Execute All Due Pulls ({dueCount})</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Success Notification Banner */}
@@ -218,6 +320,36 @@ export function SubscribersView() {
         </div>
       )}
 
+      {/* Error State Banner */}
+      {error && !isDemoMode && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-200 shadow-xs">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={18} className="text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold text-red-900">Merchant API Error:</span>{" "}
+              {error}
+              <div className="text-[11px] text-red-700 mt-0.5">
+                Target endpoint: <code className="font-mono">{ORBIT_API_URL}/subscribers</code>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+            <button
+              onClick={loadSubscribers}
+              className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium text-xs transition-colors"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => setIsDemoMode(true)}
+              className="px-3 py-1.5 rounded-lg bg-white border border-red-300 hover:bg-red-100 text-red-900 font-medium text-xs transition-colors"
+            >
+              Use Demo Data
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 2. Metrics Ribbon */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl bg-white border border-black/10 shadow-xs">
@@ -225,7 +357,7 @@ export function SubscribersView() {
             Total Subscribers
           </div>
           <div className="text-2xl font-bold text-black mt-1">
-            148
+            {isLoading ? "—" : subscribers.length}
           </div>
           <div className="text-xs text-neutral-500 mt-0.5">
             Active on-chain vaults
@@ -237,7 +369,7 @@ export function SubscribersView() {
             Pulls Due Now
           </div>
           <div className={`text-2xl font-bold mt-1 ${dueCount > 0 ? "text-amber-600" : "text-black"}`}>
-            {dueCount}
+            {isLoading ? "—" : dueCount}
           </div>
           <div className="text-xs text-neutral-500 mt-0.5">
             {dueCount > 0 ? "Ready for on-chain trigger" : "All vaults up to date"}
@@ -249,7 +381,7 @@ export function SubscribersView() {
             Settled to Date
           </div>
           <div className="text-2xl font-bold text-black mt-1">
-            {totalSettledAll.toLocaleString("en-US", { minimumFractionDigits: 2 })} <span className="text-xs font-mono font-bold text-neutral-500">USDC</span>
+            {isLoading ? "—" : totalSettledAll.toLocaleString("en-US", { minimumFractionDigits: 2 })} <span className="text-xs font-mono font-bold text-neutral-500">USDC</span>
           </div>
           <div className="text-xs text-neutral-500 mt-0.5">
             100% non-custodial
@@ -311,14 +443,22 @@ export function SubscribersView() {
                 : "text-neutral-500 hover:text-black"
             }`}
           >
-            Active ({subscribers.length - dueCount})
+            Active ({Math.max(0, subscribers.length - dueCount)})
           </button>
         </div>
       </div>
 
       {/* 4. Subscribers Table */}
       <div className="rounded-xl border border-black/10 bg-white overflow-hidden shadow-xs">
-        {filteredSubscribers.length > 0 ? (
+        {isLoading ? (
+          <div className="py-20 flex flex-col items-center justify-center text-center">
+            <RotateCw size={24} className="text-black animate-spin mb-3" />
+            <h4 className="font-semibold text-black text-sm">Loading subscribers...</h4>
+            <p className="text-xs text-neutral-500 mt-1 font-mono">
+              Fetching active vaults from {ORBIT_API_URL}/subscribers
+            </p>
+          </div>
+        ) : filteredSubscribers.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-neutral-50/80 border-b border-black/10 text-neutral-500 uppercase tracking-wider font-semibold text-[10px]">
@@ -368,7 +508,7 @@ export function SubscribersView() {
                           </a>
                         </div>
                         <div className="text-[10px] font-mono text-neutral-400 mt-0.5 pl-4">
-                          ID: {sub.id} · Joined {sub.joinedDate}
+                          ID: {sub.id.slice(0, 16)} · Joined {sub.joinedDate}
                         </div>
                       </td>
 
@@ -383,7 +523,7 @@ export function SubscribersView() {
                           {sub.amount.toFixed(2)} USDC
                         </div>
                         <div className="text-[10px] text-neutral-400">
-                          Per 30 Days
+                          Per Cycle
                         </div>
                       </td>
 
@@ -393,7 +533,7 @@ export function SubscribersView() {
                           {sub.totalSettled.toFixed(2)} USDC
                         </div>
                         <div className="text-[10px] text-neutral-400">
-                          {Math.round(sub.totalSettled / sub.amount)} pulls settled
+                          {Math.round(sub.totalSettled / (sub.amount || 1))} pulls settled
                         </div>
                       </td>
 
@@ -478,6 +618,14 @@ export function SubscribersView() {
                 ? `No active vaults matching "${searchQuery}".`
                 : "When customers subscribe via the Orbit Checkout Widget, their on-chain vaults appear here."}
             </p>
+            {!isDemoMode && (
+              <button
+                onClick={() => setIsDemoMode(true)}
+                className="mt-4 px-3 py-1.5 rounded-lg border border-black/10 bg-white hover:bg-neutral-50 text-xs font-medium text-black transition-colors"
+              >
+                Load Demo Mock Subscribers
+              </button>
+            )}
           </div>
         )}
       </div>
