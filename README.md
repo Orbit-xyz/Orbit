@@ -52,9 +52,19 @@ See [Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md) for the full system design.
 
 | Function | Auth | Description |
 |---|---|---|
-| `create_vault(user, merchant, token, amount_per_interval, interval_seconds)` | user | Validates inputs and writes `VaultData` for `(user, merchant)`. Rejects `amount_per_interval <= 0` and `interval_seconds == 0`. Sets `last_pull_timestamp = 0`. Moves no funds. |
-| `pull_funds(user, merchant)` | merchant | Verifies the vault exists and that the billing interval has elapsed. Calls `transfer_from(orbit, user, merchant, amount_per_interval)`, then saves `last_pull_timestamp = now`. |
-| `batch_disburse(sender, token, splits)` | sender | Calls `transfer_from(orbit, sender, split.recipient, split.amount)` for each split, all in one invocation. |
+| `create_vault(user, merchant, token, amount_per_interval, interval_seconds)` | user | Validates inputs and writes `VaultData` for `(user, merchant)`. Rejects `amount_per_interval <= 0` and `interval_seconds == 0`. Sets `last_pull_timestamp = 0`. Moves no funds. Emits `vault_created`. |
+| `pull_funds(user, merchant)` | merchant | Verifies the vault exists and that the billing interval has elapsed. Calls `transfer_from(orbit, user, merchant, amount_per_interval)`, then saves `last_pull_timestamp = now`. Emits `funds_pulled`. |
+| `batch_disburse(sender, token, splits)` | sender | Calls `transfer_from(orbit, sender, split.recipient, split.amount)` for each split, all in one invocation. Emits `batch_disbursed`. |
+
+### Contract Events
+
+The contract emits structured events for all successful state changes, allowing off-chain indexers, dashboards, and webhooks to observe protocol activity without ambiguity:
+
+| Event | Topics | Data | Trigger |
+|---|---|---|---|
+| `vault_created` | `("vault_created", user: Address, merchant: Address)` | `(token: Address, amount_per_interval: i128, interval_seconds: u64)` | Emitted when a subscriber registers or updates a vault in `create_vault`. |
+| `funds_pulled` | `("funds_pulled", user: Address, merchant: Address)` | `(amount_per_interval: i128, timestamp: u64)` | Emitted when a merchant successfully pulls a cycle's funds in `pull_funds`. |
+| `batch_disbursed` | `("batch_disbursed", sender: Address)` | `(token: Address, recipient_count: u32, total_amount: i128)` | Emitted when payroll transfers complete in `batch_disburse`. |
 
 ### Validation and Errors
 
@@ -481,7 +491,6 @@ The release profile sets `overflow-checks = true`. The one addition (`last_pull_
 - `create_vault` does not validate that `amount_per_interval > 0` or `interval_seconds > 0`. A zero interval turns the vault into "pull whenever", still capped by the allowance.
 - Re-calling `create_vault` resets `last_pull_timestamp` to 0, which enables an immediate pull. Only the subscriber can do this, but clients should warn them.
 - `batch_disburse` does not reject zero or negative amounts. The SAC rejects negative amounts.
-- The contract emits no events. Indexers have to rely on transaction results and SAC transfer events.
 - `POST /trigger-pull` accepts `merchant_secret` in the request body. That is fine for testnet demos only. Production should sign on the client (Freighter) or with a KMS-held key.
 
 > This contract has not been audited. It runs on testnet only.
@@ -531,7 +540,7 @@ Orbit/
 - [x] Merchant Control Center and hosted checkout
 - [x] Freighter integration
 - [ ] Typed `contracterror` codes instead of string panics
-- [ ] Contract events (`VaultCreated`, `FundsPulled`, `BatchDisbursed`)
+- [x] Contract events (`vault_created`, `funds_pulled`, `batch_disbursed`)
 - [ ] Input validation on `create_vault` and `batch_disburse`
 - [ ] `cancel_vault` entrypoint and TTL extension for vault entries
 - [ ] Broader test suite (early pull, missing vault, batch rollback)
