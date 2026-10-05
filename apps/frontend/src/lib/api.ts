@@ -81,7 +81,8 @@ export function mapApiSubscriberToRecord(
   } else if (isValidNextBilling) {
     const diffMs = nextBilling.getTime() - now.getTime();
     const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-    nextPullDate = diffDays > 0 ? `In ${diffDays} days` : "Due Now";
+    nextPullDate =
+      diffDays > 0 ? `In ${diffDays} ${diffDays === 1 ? "day" : "days"}` : "Due Now";
   }
 
   const createdDate = new Date(item.created_at);
