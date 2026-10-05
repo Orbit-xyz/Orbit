@@ -137,6 +137,29 @@ describe('Merchant API Route Validation & Responses', () => {
       expect(res.status).toBe(404);
       expect(res.body.error).toBe('Plan not found');
     });
+
+    it('returns 404 when Supabase reports no matching row', async () => {
+      mockSupabase.single.mockResolvedValueOnce({
+        data: null,
+        error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
+      });
+
+      const res = await request(app).get(`/plans/${validPlanId}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Plan not found');
+    });
+
+    it('returns 500 for other database errors', async () => {
+      mockSupabase.single.mockResolvedValueOnce({
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      });
+
+      const res = await request(app).get(`/plans/${validPlanId}`);
+
+      expect(res.status).toBe(500);
+    });
   });
 
   // ==========================================
@@ -215,6 +238,23 @@ describe('Merchant API Route Validation & Responses', () => {
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('plan_id');
     });
+
+    it('returns 404 when the plan does not exist', async () => {
+      mockSupabase.single.mockResolvedValueOnce({
+        data: null,
+        error: { code: '23503', message: 'insert or update on table "subscriptions" violates foreign key constraint' },
+      });
+
+      const res = await request(app)
+        .post('/subscriptions')
+        .send({
+          plan_id: validPlanId,
+          customer_wallet_address: validStellarAddress,
+        });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Plan not found');
+    });
   });
 
   // ==========================================
@@ -242,6 +282,23 @@ describe('Merchant API Route Validation & Responses', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('subscription_id');
+    });
+
+    it('returns 404 when the subscription does not exist', async () => {
+      mockSupabase.single.mockResolvedValueOnce({
+        data: null,
+        error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
+      });
+
+      const res = await request(app)
+        .post('/trigger-pull')
+        .send({
+          subscription_id: validSubscriptionId,
+          merchant_secret: 'some-secret',
+        });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Subscription not found');
     });
 
     describe('on-chain confirmation', () => {

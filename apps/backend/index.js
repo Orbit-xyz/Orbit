@@ -75,6 +75,12 @@ const triggerPullSchema = z.object({
     merchant_secret: z.string().min(1, "merchant_secret is required"),
 });
 
+// PostgREST reports a .single() lookup that matched no rows as an error, not as empty data
+const isNoRowsError = (error) => error?.code === 'PGRST116';
+
+// Postgres foreign key violation, e.g. inserting a subscription for a plan that does not exist
+const isForeignKeyError = (error) => error?.code === '23503';
+
 const formatZodError = (err) => {
     const issue = err.issues[0];
     const field = issue.path.join('.') || 'input';
@@ -130,6 +136,7 @@ app.get('/plans/:id', async (req, res) => {
             .eq('id', id)
             .single();
 
+        if (isNoRowsError(error)) return res.status(404).json({ error: "Plan not found" });
         if (error) throw error;
         if (!data) return res.status(404).json({ error: "Plan not found" });
 
@@ -196,6 +203,7 @@ app.post('/trigger-pull', async (req, res) => {
             .eq('id', subscription_id)
             .single();
 
+        if (isNoRowsError(subError)) return res.status(404).json({ error: "Subscription not found" });
         if (subError) throw subError;
         if (!sub) return res.status(404).json({ error: "Subscription not found" });
 
@@ -206,6 +214,7 @@ app.post('/trigger-pull', async (req, res) => {
             .eq('id', sub.plans.merchant_id)
             .single();
 
+        if (isNoRowsError(merchantError)) return res.status(404).json({ error: "Merchant not found" });
         if (merchantError) throw merchantError;
 
         // 2. Setup Stellar SDK (Testnet)
@@ -324,6 +333,7 @@ app.post('/subscriptions', async (req, res) => {
             .select()
             .single();
 
+        if (isForeignKeyError(error)) return res.status(404).json({ error: "Plan not found" });
         if (error) throw error;
         
         res.status(201).json({ message: "Subscription created", subscription: data });

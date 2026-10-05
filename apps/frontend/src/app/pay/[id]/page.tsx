@@ -166,6 +166,8 @@ export default function HostedCheckoutPage({
 
   if (!linkData) return null;
 
+  const isRecurring = linkData.type === "recurring";
+
   return (
     <div className="min-h-screen bg-[#fafafb] flex flex-col justify-between text-[#09090b]">
       {/* Top Banner */}
@@ -212,12 +214,12 @@ export default function HostedCheckoutPage({
                 </p>
                 <div className="mt-4 pt-4 border-t border-black/5 flex items-baseline justify-between">
                   <span className="text-xs font-semibold uppercase text-neutral-500">
-                    {linkData.type === "recurring" ? "Recurring Subscription" : "One-Time Payment"}
+                    {isRecurring ? "Recurring Subscription" : "One-Time Payment"}
                   </span>
                   <div className="text-3xl font-extrabold text-black font-mono">
                     ${linkData.amount.toFixed(2)}
                     <span className="text-xs font-medium text-neutral-500 ml-1.5 font-sans">
-                      USDC {linkData.type === "recurring" ? `/ ${linkData.intervalDays} days` : ""}
+                      USDC {isRecurring ? `/ ${linkData.intervalDays} days` : ""}
                     </span>
                   </div>
                 </div>
@@ -231,7 +233,8 @@ export default function HostedCheckoutPage({
                 </div>
                 <p className="text-[11px] text-neutral-600 leading-relaxed">
                   Your funds remain securely in your wallet. By approving, you grant {linkData.merchantName}{" "}
-                  permission to pull exactly ${linkData.amount.toFixed(2)} USDC on interval. You retain 100% control
+                  permission to pull exactly ${linkData.amount.toFixed(2)} USDC{" "}
+                  {isRecurring ? "on interval" : "once"}. You retain 100% control
                   to pause or revoke this allowance at any moment.
                 </p>
               </div>
@@ -300,7 +303,7 @@ export default function HostedCheckoutPage({
                   Authorization Confirmed!
                 </h3>
                 <p className="text-xs text-neutral-500 max-w-sm mx-auto mt-1.5 leading-relaxed">
-                  Your recurring allowance vault is active on Stellar Testnet for{" "}
+                  Your {isRecurring ? "recurring" : "one-time"} allowance vault is active on Stellar Testnet for{" "}
                   <strong className="text-black">{linkData.merchantName}</strong>.
                 </p>
               </div>
@@ -317,7 +320,9 @@ export default function HostedCheckoutPage({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-neutral-500">Cadence:</span>
-                  <span className="font-mono text-neutral-700">Every {linkData.intervalDays} Days</span>
+                  <span className="font-mono text-neutral-700">
+                    {isRecurring ? `Every ${linkData.intervalDays} Days` : "One-Time"}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-neutral-500">Vault Contract:</span>
