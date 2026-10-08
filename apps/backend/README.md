@@ -59,7 +59,7 @@ Content-Type: `application/json`
 |---|---|---|---|
 | `merchant_id` | `string` (UUID) | Yes | Unique ID of the merchant creating the plan (must exist in `merchants` table). |
 | `name` | `string` | Yes | Name of the subscription plan (e.g., `"Pro Plan - 29 USDC/month"`). |
-| `usdc_amount` | `number` | Yes | Billing amount in USDC per interval (e.g., `29`). |
+| `usdc_amount` | `integer` | Yes | Billing amount per interval in raw token units. USDC has 7 decimals, so `290000000` is 29 USDC. This is the same unit as the contract's `amount_per_interval`. |
 | `interval_seconds` | `number` | Yes | Cadence between billing pulls in seconds (e.g., `2592000` for 30 days). |
 
 #### Example Request
@@ -70,7 +70,7 @@ curl -X POST http://localhost:3001/plans \
   -d '{
     "merchant_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
     "name": "Pro Plan - 29 USDC/month",
-    "usdc_amount": 29,
+    "usdc_amount": 290000000,
     "interval_seconds": 2592000
   }'
 ```
@@ -85,7 +85,7 @@ Status: `201 Created`
     "id": "e2a0b3df-2015-4672-9721-a1e94c1408d7",
     "merchant_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
     "name": "Pro Plan - 29 USDC/month",
-    "usdc_amount": 29,
+    "usdc_amount": 290000000,
     "interval_seconds": 2592000,
     "created_at": "2026-09-30T00:00:00.000Z"
   }
@@ -138,7 +138,7 @@ Status: `200 OK`
     "id": "e2a0b3df-2015-4672-9721-a1e94c1408d7",
     "merchant_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
     "name": "Pro Plan - 29 USDC/month",
-    "usdc_amount": 29,
+    "usdc_amount": 290000000,
     "interval_seconds": 2592000,
     "created_at": "2026-09-30T00:00:00.000Z",
     "merchants": {
@@ -202,7 +202,7 @@ Status: `200 OK`
       "plans": {
         "merchant_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
         "name": "Pro Plan - 29 USDC/month",
-        "usdc_amount": 29
+        "usdc_amount": 290000000
       }
     }
   ]

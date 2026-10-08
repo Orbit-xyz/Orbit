@@ -20,7 +20,7 @@ describe('Merchant API Route Validation & Responses', () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       single: vi.fn().mockResolvedValue({
-        data: { id: validPlanId, name: 'Pro Plan', usdc_amount: 29 },
+        data: { id: validPlanId, name: 'Pro Plan', usdc_amount: 290000000 },
         error: null,
       }),
       update: vi.fn().mockReturnThis(),
@@ -39,7 +39,7 @@ describe('Merchant API Route Validation & Responses', () => {
         .send({
           merchant_id: validMerchantId,
           name: 'Pro Plan',
-          usdc_amount: 29,
+          usdc_amount: 290000000,
           interval_seconds: 2592000,
         });
 
@@ -65,7 +65,7 @@ describe('Merchant API Route Validation & Responses', () => {
         .send({
           merchant_id: 'not-a-valid-uuid',
           name: 'Pro Plan',
-          usdc_amount: 29,
+          usdc_amount: 290000000,
           interval_seconds: 2592000,
         });
 
@@ -87,13 +87,27 @@ describe('Merchant API Route Validation & Responses', () => {
       expect(res.body.error).toContain('usdc_amount');
     });
 
+    it('rejects a non-integer usdc_amount with 400', async () => {
+      const res = await request(app)
+        .post('/plans')
+        .send({
+          merchant_id: validMerchantId,
+          name: 'Pro Plan',
+          usdc_amount: 29.5,
+          interval_seconds: 2592000,
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('usdc_amount');
+    });
+
     it('rejects non-positive interval_seconds with 400', async () => {
       const res = await request(app)
         .post('/plans')
         .send({
           merchant_id: validMerchantId,
           name: 'Pro Plan',
-          usdc_amount: 29,
+          usdc_amount: 290000000,
           interval_seconds: 0,
         });
 
@@ -318,7 +332,7 @@ describe('Merchant API Route Validation & Responses', () => {
               data: {
                 id: validSubscriptionId,
                 customer_wallet_address: validStellarAddress,
-                plans: { merchant_id: validMerchantId, usdc_amount: 29, interval_seconds: 2592000 },
+                plans: { merchant_id: validMerchantId, usdc_amount: 290000000, interval_seconds: 2592000 },
               },
               error: null,
             });
