@@ -42,7 +42,7 @@ Key rules:
 - **Approved**: the subscriber grants the Orbit contract a SAC allowance. This is the only step that lets tokens move. It is bounded by an amount and a `live_until_ledger`.
 - **Active**: `create_vault` records the terms (`token`, `amount_per_interval`, `interval_seconds`) under the `(user, merchant)` key. No tokens move.
 - **Active -> Active (pull)**: only the merchant can call `pull_funds`. The first pull is allowed right away. Later pulls need `ledger.timestamp() >= last_pull_timestamp + interval_seconds`.
-- **Exhausted / Revoked**: the SAC rejects `transfer_from` once the allowance runs out, expires, or is set to 0. Orbit has no separate revoke entrypoint. The token allowance is the kill switch.
+- **Exhausted / Revoked**: the SAC rejects `transfer_from` once the allowance runs out, expires, or is set to 0. The subscriber can also call `cancel_vault` to delete the vault itself, after which `pull_funds` fails with `Vault does not exist`.
 
 See [Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md) for the full system design.
 
@@ -53,6 +53,7 @@ See [Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md) for the full system design.
 | Function | Auth | Description |
 |---|---|---|
 | `create_vault(user, merchant, token, amount_per_interval, interval_seconds)` | user | Validates inputs and writes `VaultData` for `(user, merchant)`. Rejects `amount_per_interval <= 0` and `interval_seconds == 0`. Sets `last_pull_timestamp = 0`. Moves no funds. Emits `vault_created`. |
+| `cancel_vault(user, merchant)` | user | Removes the vault for `(user, merchant)`. Fails with `Vault does not exist` if there is none. Does not change the token allowance. Emits `vault_cancelled`. |
 | `pull_funds(user, merchant)` | merchant | Verifies the vault exists and that the billing interval has elapsed. Calls `transfer_from(orbit, user, merchant, amount_per_interval)`, then saves `last_pull_timestamp = now`. Emits `funds_pulled`. |
 | `batch_disburse(sender, token, splits)` | sender | Calls `transfer_from(orbit, sender, split.recipient, split.amount)` for each split, all in one invocation. Emits `batch_disbursed`. |
 
@@ -63,6 +64,7 @@ The contract emits structured events for all successful state changes, allowing 
 | Event | Topics | Data | Trigger |
 |---|---|---|---|
 | `vault_created` | `("vault_created", user: Address, merchant: Address)` | `(token: Address, amount_per_interval: i128, interval_seconds: u64)` | Emitted when a subscriber registers or updates a vault in `create_vault`. |
+| `vault_cancelled` | `("vault_cancelled", user: Address, merchant: Address)` | `()` | Emitted when a subscriber closes a vault in `cancel_vault`. |
 | `funds_pulled` | `("funds_pulled", user: Address, merchant: Address)` | `(amount_per_interval: i128, timestamp: u64)` | Emitted when a merchant successfully pulls a cycle's funds in `pull_funds`. |
 | `batch_disbursed` | `("batch_disbursed", sender: Address)` | `(token: Address, recipient_count: u32, total_amount: i128)` | Emitted when payroll transfers complete in `batch_disburse`. |
 
@@ -309,6 +311,7 @@ The contract is a single `no_std` crate:
 |---|---|---|---|
 | `create_vault` | Subscriber | Writes | Creates or replaces recurring payment terms for a user and merchant |
 | `get_vault` | None | Read-only | Returns the current `VaultData` for a user and merchant, or `None` if no vault exists |
+| `cancel_vault` | Subscriber | Removes | Deletes the vault for a user and merchant so no further pulls are possible |
 | `pull_funds` | Merchant | Reads and writes | Transfers one billing interval and updates `last_pull_timestamp` |
 | `batch_disburse` | Sender | No contract storage | Atomically distributes token amounts to multiple recipients |
 
@@ -324,7 +327,7 @@ Each state-changing method follows the same pattern:
 
 | Key | Storage | Value | Written by |
 |---|---|---|---|
-| `VaultKey { user, merchant }` | persistent | `VaultData` | `create_vault`, `pull_funds` |
+| `VaultKey { user, merchant }` | persistent | `VaultData` | `create_vault`, `pull_funds`; removed by `cancel_vault` |
 
 There is one vault per `(user, merchant)` pair. Calling `create_vault` again for the same pair overwrites the terms and resets `last_pull_timestamp` to 0.
 
@@ -541,9 +544,9 @@ Orbit/
 - [x] Merchant Control Center and hosted checkout
 - [x] Freighter integration
 - [ ] Typed `contracterror` codes instead of string panics
-- [x] Contract events (`vault_created`, `funds_pulled`, `batch_disbursed`)
+- [x] Contract events (`vault_created`, `vault_cancelled`, `funds_pulled`, `batch_disbursed`)
 - [ ] Input validation on `create_vault` and `batch_disburse`
-- [ ] `cancel_vault` entrypoint and TTL extension for vault entries
+- [x] `cancel_vault` entrypoint and TTL extension for vault entries
 - [ ] Broader test suite (early pull, missing vault, batch rollback)
 - [ ] Keeper service with client-side signing
 - [ ] Security audit and mainnet deployment
