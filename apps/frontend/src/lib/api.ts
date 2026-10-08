@@ -1,4 +1,5 @@
 import { SubscriberRecord } from "@/components/dashboard/dashboard-types";
+import { fromRawUsdc } from "@/lib/usdc";
 
 export const ORBIT_API_URL =
   process.env.NEXT_PUBLIC_ORBIT_API_URL || "http://localhost:3001";
@@ -94,7 +95,7 @@ export function mapApiSubscriberToRecord(
       })
     : "Recent";
 
-  const amount = Number(item.plans?.usdc_amount || 0);
+  const amount = fromRawUsdc(item.plans?.usdc_amount);
 
   return {
     id: item.id,

@@ -121,6 +121,25 @@ impl OrbitContract {
         env.storage().persistent().get(&key)
     }
 
+    /// Close a vault so the merchant can no longer pull from it.
+    /// Only the user can cancel. The token allowance is left untouched.
+    pub fn cancel_vault(env: Env, user: Address, merchant: Address) {
+        user.require_auth();
+
+        let key = VaultKey {
+            user: user.clone(),
+            merchant: merchant.clone(),
+        };
+
+        assert!(env.storage().persistent().has(&key), "Vault does not exist");
+
+        env.storage().persistent().remove(&key);
+
+        // Emit contract event
+        env.events()
+            .publish((Symbol::new(&env, "vault_cancelled"), user, merchant), ());
+    }
+
     /// 2. THE PULL (Execute Billing)
     /// The merchant (or the Orbit backend) calls this to pull the funds.
     pub fn pull_funds(env: Env, user: Address, merchant: Address) {

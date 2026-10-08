@@ -745,3 +745,153 @@ fn test_contract_events_published_for_all_entrypoints() {
     );
 }
 
+// ----------------------------------------------------------------------------
+// ISSUE #44: CANCEL VAULT
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_cancel_vault_removes_vault_and_blocks_pull() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+    token_admin_client.mint(&user, &100_0000000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    token_client.approve(&user, &orbit_client.address, &100_0000000, &2000000);
+    orbit_client.create_vault(&user, &merchant, &token_address, &29_0000000, &86400);
+
+    orbit_client.cancel_vault(&user, &merchant);
+
+    assert_eq!(orbit_client.get_vault(&user, &merchant), None);
+
+    // The allowance is still in place, but with no vault the pull must fail
+    let res = orbit_client.try_pull_funds(&user, &merchant);
+    assert!(res.is_err());
+    assert_eq!(token_client.balance(&merchant), 0);
+    assert_eq!(token_client.balance(&user), 100_0000000);
+}
+
+#[test]
+fn test_cancel_vault_fails_when_vault_does_not_exist() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    let res = orbit_client.try_cancel_vault(&user, &merchant);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_cancel_vault_authorized_by_merchant_fails() {
+    let env = Env::default();
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    orbit_client.create_vault(&user, &merchant, &token, &29_0000000, &86400);
+
+    // Now mock auth ONLY for the merchant
+    let res = orbit_client
+        .mock_auths(&[MockAuth {
+            address: &merchant,
+            invoke: &MockAuthInvoke {
+                contract: &orbit_client.address,
+                fn_name: "cancel_vault",
+                args: (&user, &merchant).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_cancel_vault(&user, &merchant);
+    assert!(res.is_err());
+
+    // The vault is untouched
+    assert!(orbit_client.get_vault(&user, &merchant).is_some());
+}
+
+#[test]
+fn test_create_vault_works_again_after_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+    token_admin_client.mint(&user, &100_0000000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    token_client.approve(&user, &orbit_client.address, &100_0000000, &2000000);
+
+    orbit_client.create_vault(&user, &merchant, &token_address, &29_0000000, &86400);
+    orbit_client.cancel_vault(&user, &merchant);
+    orbit_client.create_vault(&user, &merchant, &token_address, &40_0000000, &172800);
+
+    let vault = orbit_client
+        .get_vault(&user, &merchant)
+        .expect("vault should exist");
+    assert_eq!(vault.amount_per_interval, 40_0000000);
+    assert_eq!(vault.interval_seconds, 172800);
+    assert_eq!(vault.last_pull_timestamp, 0);
+
+    orbit_client.pull_funds(&user, &merchant);
+    assert_eq!(token_client.balance(&merchant), 40_0000000);
+}
+
+#[test]
+fn test_cancel_vault_event_published() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit_client = OrbitContractClient::new(&env, &contract_id);
+
+    orbit_client.create_vault(&user, &merchant, &token, &29_0000000, &86400);
+    orbit_client.cancel_vault(&user, &merchant);
+
+    let cancel_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "vault_cancelled").to_val(),
+        user.to_val(),
+        merchant.to_val(),
+    ];
+    let expected_cancel = soroban_sdk::vec![
+        &env,
+        (
+            orbit_client.address.clone(),
+            cancel_topics,
+            ().into_val(&env)
+        ),
+    ];
+    assert_eq!(env.events().all(), expected_cancel);
+}

@@ -53,7 +53,10 @@ const stellarAddressSchema = z.string().refine(
 const createPlanSchema = z.object({
     merchant_id: z.string().uuid("merchant_id must be a valid UUID"),
     name: z.string().trim().min(1, "name cannot be empty"),
-    usdc_amount: z.coerce.number().positive("usdc_amount must be greater than 0"),
+    // Raw token units (USDC has 7 decimals, so 290000000 = 29 USDC), same as the contract's amount_per_interval
+    usdc_amount: z.coerce.number()
+        .int("usdc_amount must be an integer in raw token units")
+        .positive("usdc_amount must be greater than 0"),
     interval_seconds: z.coerce.number().int().positive("interval_seconds must be a positive integer"),
 });
 
