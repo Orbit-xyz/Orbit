@@ -50,10 +50,17 @@ const {
     RateUnavailableError,
 } = require('./oracle');
 const { getDatabaseManager } = require('./db');
+const { createStellarSplitForwarder, createPayoutSplitDispatcher, registerPayoutSplitRoutes } = require('./payout-splits');
+const { createPriceIndexationWorker, registerPriceIndexationRoutes } = require('./price-indexation');
 const { registerPrivacyRoutes } = require('./privacy');
+const { createUsageBufferFromEnv, registerUsageRoutes, rollupUsage } = require('./usage-meter');
+const { registerCohortRoutes } = require('./cohorts');
+const { registerNotificationTemplateRoutes } = require('./notification-templates');
 
 const app = express();
 const feeEstimator = createFeeEstimator({ horizonUrl: process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org' });
+let defaultUsageBuffer;
+const getUsageBuffer = () => app.locals.usageBuffer || (defaultUsageBuffer ??= createUsageBufferFromEnv());
 // Set when running behind a reverse proxy so req.ip (used for rate limiting) is the client's address
 if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
 app.use(cors());
@@ -107,7 +114,7 @@ const getReadSupabase = (appInstance = app) => dbManager.getReadClient(appInstan
 const getSupabase = () => getPrimarySupabase(app);
 
 // Merchant routes: authenticate the API key, then apply its rate limit
-const authenticateMerchant = [requireApiKey(getSupabase), apiKeyRateLimit];
+const authenticateMerchant = [requireApiKey(getSupabase), reputation.markAuthenticated, apiKeyRateLimit];
 registerAnalyticsRoutes(app, getSupabase);
 
 // Allows tests to inject a mock Soroban RPC server instead of hitting testnet
@@ -122,6 +129,7 @@ const getRelayer = () => {
         defaultRelayer = createRelayerFromEnv({
             server: getSorobanServer(process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org'),
             getSupabase,
+            feeEstimator,
         });
     }
     return defaultRelayer;
@@ -1805,6 +1813,9 @@ app.post('/webhooks/:id/rotate-secret', async (req, res) => {
 
 registerComplianceRoutes(app, getSupabase, authenticateMerchant);
 registerPrivacyRoutes(app, { getPrimarySupabase, authenticateMerchant });
+registerUsageRoutes(app, { getSupabase, authenticateMerchant, getBuffer: getUsageBuffer });
+registerCohortRoutes(app, getSupabase, authenticateMerchant);
+registerNotificationTemplateRoutes(app, getSupabase, authenticateMerchant);
 registerSigningSessionRoutes(app, getSupabase, authenticateMerchant);
 
 // Webhook incident alerting: Slack / PagerDuty / email channels and failure telemetry (#189)
@@ -1909,6 +1920,12 @@ if (require.main === module) {
     } else {
         console.warn("Oracle worker not started: Supabase client not initialized");
     }
+
+    const usageInterval = setInterval(() => {
+        const buffer = getUsageBuffer(), supabase = getSupabase();
+        if (buffer && supabase) rollupUsage({ buffer, supabase }).catch((err) => console.error('Usage rollup failed:', err));
+    }, Number(process.env.USAGE_ROLLUP_INTERVAL_MS) || 300000);
+    usageInterval.unref();
 
     app.listen(PORT, () => {
         console.log(`Orbit Merchant API running on http://localhost:${PORT}`);
