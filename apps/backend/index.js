@@ -65,8 +65,6 @@ const {
     registerSnapshotRoutes,
 } = require('./contract-state-snapshot');
 const { getDatabaseManager } = require('./db');
-const { createStellarSplitForwarder, createPayoutSplitDispatcher, registerPayoutSplitRoutes } = require('./payout-splits');
-const { createPriceIndexationWorker, registerPriceIndexationRoutes } = require('./price-indexation');
 const { registerPrivacyRoutes } = require('./privacy');
 const { createUsageBufferFromEnv, registerUsageRoutes, rollupUsage } = require('./usage-meter');
 const { registerCohortRoutes } = require('./cohorts');
@@ -509,19 +507,6 @@ const loadPullContext = async (supabase, subscriptionId, merchant) => {
 };
 
 // Records the confirmed outcome of a pull transaction, whoever submitted it
-const applyPullOutcome = async ({
-    supabase,
-    req,
-    sub,
-    merchant,
-    subscription_id,
-    txHash,
-    status,
-    confirmation = null,
-    server = null,
-    signedTx = null,
-    extraBody = {},
-}) => {
 const applyPullOutcome = async ({ supabase, req, sub, merchant, subscription_id, txHash, status, confirmation, extraBody = {} }) => {
     if (status === "SUCCESS") {
         const pullTime = new Date();
@@ -547,12 +532,7 @@ const applyPullOutcome = async ({ supabase, req, sub, merchant, subscription_id,
             resourceId: subscription_id,
             ipAddress: getClientIp(req),
             changesBefore: { next_billing_date: sub.next_billing_date, status: sub.status },
-            changesAfter: {
-                next_billing_date: nextBilling.toISOString(),
-                status: 'active',
-                txHash,
-                amount: String(sub.plans.usdc_amount),
-            },
+            changesAfter: { next_billing_date: nextBilling.toISOString(), status: 'active', txHash },
         });
 
         if (sub.plans.merchant_id) {
@@ -575,31 +555,6 @@ const applyPullOutcome = async ({ supabase, req, sub, merchant, subscription_id,
                 }
             }
 
-            if (confirmation) {
-                const verifiedAmount = require('./transaction-report').confirmedSettlementAmount(
-                    confirmation,
-                    {
-                        customerWallet: sub.customer_wallet_address,
-                        merchantWallet: merchant.wallet_address,
-                        contractId: process.env.ORBIT_CONTRACT_ID,
-                    },
-                );
-                if (verifiedAmount === null) {
-                    console.error('CRITICAL: confirmed transfer missing verified amount; reconcile transaction:', txHash);
-                } else {
-                    const { error: paymentError } = await supabase.from('payment_transactions').insert([{
-                        merchant_id: sub.plans.merchant_id,
-                        subscription_id,
-                        plan_id: sub.plan_id,
-                        customer_wallet_address: sub.customer_wallet_address,
-                        amount_usdc_units: verifiedAmount,
-                        status: 'settled',
-                        tx_hash: txHash,
-                        settled_at: pullTime.toISOString(),
-                    }]);
-                    if (paymentError && paymentError.code !== '23505') {
-                        console.error('CRITICAL: on-chain settlement needs ledger reconciliation:', txHash, paymentError);
-                    }
             // Only record amounts independently verified from the
             // successful on-chain funds_pulled event. Plan and oracle
             // quotes are not necessarily the vault's actual transfer.
@@ -650,7 +605,7 @@ const applyPullOutcome = async ({ supabase, req, sub, merchant, subscription_id,
                     merchantId: sub.plans.merchant_id,
                     subscriptionId: subscription_id,
                     primaryTxHash: txHash,
-                    amountUnits: settledAmount,
+                    amountUnits: sub.plans.usdc_amount,
                     settledAt: pullTime.toISOString(),
                     fetchImpl: app.locals.fetchImpl,
                 });
@@ -666,16 +621,6 @@ const applyPullOutcome = async ({ supabase, req, sub, merchant, subscription_id,
     }
 
     if (status === "FAILED") {
-        if (server && signedTx) {
-            let failureReason = 'Transaction failed on-chain; inspect transaction diagnostics for the specific contract error.';
-            try {
-                const simulation = await server.simulateTransaction(signedTx);
-                if (simulation?.error) failureReason = simulation.error;
-            } catch {
-                // Keep the original failure when RPC diagnostics are unavailable
-            }
-            await recordPullFailure(supabase, subscription_id, failureReason, txHash);
-        }
         await recordPullFailure(supabase, subscription_id, 'Transaction failed on-chain; inspect transaction diagnostics for the specific contract error.', txHash);
         await markSubscriptionPastDue(supabase, subscription_id, {
             actorAddress: merchant.wallet_address,
@@ -691,14 +636,6 @@ const applyPullOutcome = async ({ supabase, req, sub, merchant, subscription_id,
 
     // Still NOT_FOUND after the timeout: outcome unknown, let the caller poll later.
     // Keep the lease until it expires so no second pull races the one still in flight.
-    if (server && signedTx) {
-        await recordPullFailure(
-            supabase,
-            subscription_id,
-            'Transaction submitted, but Soroban RPC confirmation timed out (NOT_FOUND)',
-            txHash,
-        );
-    }
     await recordPullFailure(supabase, subscription_id, 'RPC timeout: transaction submitted but not yet confirmed. Do not retry until its outcome is known.', txHash);
     return {
         status: 202,
@@ -917,7 +854,6 @@ app.post('/submit-pull', authenticateMerchant, async (req, res) => {
                     server,
                     signedTx,
                 });
-                return applyPullOutcome({ supabase, req, sub, merchant, subscription_id, txHash, status: confirmation.status, confirmation });
             });
         });
         sendResult(res, result);
