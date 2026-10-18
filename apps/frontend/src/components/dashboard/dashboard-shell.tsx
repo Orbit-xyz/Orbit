@@ -29,6 +29,7 @@ import {
   Sparkles,
   BarChart3,
   Mail,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Brand } from "@/components/layout/brand";
 import { useAuth } from "@/lib/auth-context";
@@ -49,6 +50,7 @@ import { TeamView } from "./views/team-view";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
 import { VaultModal } from "./modals/vault-modal";
 import { DeployVaultModal } from "./modals/deploy-vault-modal";
+import { ReportsTaxWizardModal } from "./modals/reports-tax-wizard-modal";
 import { NotificationDrawer } from "./drawers/notification-drawer";
 import { DOCS_URL } from "@/lib/links";
 
@@ -69,6 +71,7 @@ export function DashboardShell() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isVaultModalOpen, setIsVaultModalOpen] = useState(false);
   const [isDeployModalOpen, setIsDeployModalOpen] = useState(false);
+  const [isReportsWizardOpen, setIsReportsWizardOpen] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [isEditingBusinessName, setIsEditingBusinessName] = useState(false);
   const [businessNameInput, setBusinessNameInput] = useState("");
@@ -369,6 +372,14 @@ export function DashboardShell() {
               <span>{t("sdkDocs")}</span>
               <ArrowUpRight size={12} />
             </Link>
+            <button
+              onClick={() => setIsReportsWizardOpen(true)}
+              className="button button-secondary text-xs h-8 px-3 flex items-center gap-1.5"
+              title="Interactive Subscription Analytics & Tax Reporting Wizard (#168)"
+            >
+              <FileSpreadsheet size={13} className="text-black" />
+              <span className="hidden sm:inline">Reports & Taxes</span>
+            </button>
             {user.customContractId ? (
               <button
                 onClick={() => setIsDeployModalOpen(true)}
@@ -402,6 +413,7 @@ export function DashboardShell() {
               user={user}
               activeNetwork={activeNetwork}
               onNavigateTab={(tab) => setActiveTab(tab)}
+              onOpenReportsWizard={() => setIsReportsWizardOpen(true)}
             />
           )}
 
@@ -442,6 +454,15 @@ export function DashboardShell() {
       <DeployVaultModal
         isOpen={isDeployModalOpen}
         onClose={() => setIsDeployModalOpen(false)}
+      />
+
+      {/* Interactive Subscription Analytics Export & Tax Reporting Wizard Modal (#168) */}
+      <ReportsTaxWizardModal
+        isOpen={isReportsWizardOpen}
+        onClose={() => setIsReportsWizardOpen(false)}
+        merchantId={user.id}
+        merchantName={user.businessName}
+        walletAddress={user.walletAddress}
       />
 
       {/* Real-time Notifications Drawer */}
