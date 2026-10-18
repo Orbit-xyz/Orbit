@@ -9,6 +9,7 @@ const { API_KEY_ENVIRONMENTS, issueApiKey, requireApiKey } = require('./apiKeys'
 const { createRateLimiter, createStoreFromEnv } = require('./rateLimit');
 const { createReputationScorer, createHorizonWalletLookup } = require('./reputation');
 const { isRelayerError, createRelayerFromEnv } = require('./relayer');
+const { createFeeEstimator } = require('./fee-estimator');
 const { getAuditLogsQuerySchema, getClientIp, getActorAddress, writeAuditLog } = require('./audit');
 const {
     createWebhookSchema,
@@ -52,6 +53,7 @@ const { getDatabaseManager } = require('./db');
 const { registerPrivacyRoutes } = require('./privacy');
 
 const app = express();
+const feeEstimator = createFeeEstimator({ horizonUrl: process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org' });
 // Set when running behind a reverse proxy so req.ip (used for rate limiting) is the client's address
 if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
 app.use(cors());
@@ -696,7 +698,7 @@ app.post('/trigger-pull', authenticateMerchant, async (req, res) => {
                 const account = await server.getAccount(merchant.wallet_address);
 
                 const tx = new TransactionBuilder(account, {
-                    fee: "1000000",
+                    fee: String(await feeEstimator.estimate({ priority: "standard" })),
                     networkPassphrase: process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET
                 })
                 .addOperation(contract.call("pull_funds",
