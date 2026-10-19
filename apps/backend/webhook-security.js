@@ -118,14 +118,14 @@ async function validateWebhookURL(url, enforceHTTPS = true) {
     throw new Error("Invalid URL format");
   }
 
-  // Enforce HTTPS in production
-  if (enforceHTTPS && parsedURL.protocol !== "https:") {
-    throw new Error("Webhook URLs must use HTTPS protocol in production");
-  }
-
   // Reject file://, ftp://, gopher://, etc.
   if (!["http:", "https:"].includes(parsedURL.protocol)) {
     throw new Error("Only HTTP/HTTPS protocols are allowed");
+  }
+
+  // Enforce HTTPS in production
+  if (enforceHTTPS && parsedURL.protocol !== "https:") {
+    throw new Error("Webhook URLs must use HTTPS protocol in production");
   }
 
   // Reject URLs with authentication credentials
@@ -214,18 +214,35 @@ async function dispatchSecureWebhook(url, payload, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+  const abortPromise = new Promise((_, reject) => {
+    if (controller.signal.aborted) {
+      const err = new Error("This operation was aborted");
+      err.name = "AbortError";
+      reject(err);
+    } else {
+      controller.signal.addEventListener("abort", () => {
+        const err = new Error("This operation was aborted");
+        err.name = "AbortError";
+        reject(err);
+      }, { once: true });
+    }
+  });
+
   try {
-    const response = await fetchImpl(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...headers,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-      redirect: "error", // Block all HTTP redirects
-      agent, // Use custom agent with DNS pinning
-    });
+    const response = await Promise.race([
+      fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+        redirect: "error", // Block all HTTP redirects
+        agent, // Use custom agent with DNS pinning
+      }),
+      abortPromise,
+    ]);
 
     clearTimeout(timeoutId);
 
