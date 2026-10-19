@@ -11,6 +11,15 @@ The widget configures only these tree-shakeable modules from Stellar Wallets Kit
 - Lobstr
 - Hana
 - xBull
+- Mobile Wallets (Lobstr, Albedo, WalletConnect via dynamic QR code handover)
+
+## Desktop-to-Mobile Wallet Handover
+
+When desktop users don't have a browser extension installed, they can click "Scan with Mobile Wallet":
+- Generates a unique, secure session channel ID with a 5-minute clean expiration timer.
+- Renders dynamic high-resolution QR codes supporting Universal Checkout, Lobstr, Albedo, and WalletConnect URI deep links.
+- Establishes real-time polling and WebSocket listener on the session channel.
+- Automatically detects mobile authorization and on-chain submission, immediately transitioning to the GSAP success animation and receipt view without requiring desktop browser interaction.
 
 The selected wallet is persisted in `localStorage`. Use `allowedWallets` to expose a subset.
 
