@@ -1,5 +1,11 @@
-const { describe, it, expect, beforeEach, jest } = require("@jest/globals");
+import { describe, it, expect, beforeEach, vi } from "vitest";
 const dns = require("dns").promises;
+
+vi.spyOn(dns, "resolve4");
+vi.spyOn(dns, "resolve6");
+
+const jest = vi;
+
 const {
   validateWebhookURL,
   dispatchSecureWebhook,
@@ -9,14 +15,6 @@ const {
   resolveHostname,
   testWebhookSecurity,
 } = require("../webhook-security");
-
-// Mock DNS module
-jest.mock("dns", () => ({
-  promises: {
-    resolve4: jest.fn(),
-    resolve6: jest.fn(),
-  },
-}));
 
 describe("Webhook Security Scanner (#177)", () => {
   beforeEach(() => {
