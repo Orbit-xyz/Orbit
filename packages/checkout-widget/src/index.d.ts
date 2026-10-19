@@ -53,4 +53,25 @@ export class SessionWalletAdapter {
   disconnect(): Promise<boolean>;
 }
 
+export interface HandoverSession {
+  channelId: string;
+  planId?: string;
+  planName?: string;
+  amount?: string | number;
+  merchantAddress?: string;
+  merchantName?: string;
+  createdAt: number;
+  expiresAt: number;
+  status: 'pending' | 'scanned' | 'confirmed' | 'expired';
+  payloads: {
+    universal: string;
+    walletConnect: string;
+    lobstr: string;
+    albedo: string;
+  };
+}
+export function createHandoverSession(options: any): HandoverSession;
+export function buildHandoverPayloads(options: any): HandoverSession['payloads'];
+export function listenHandoverSession(options: any): { stop: () => void; getStatus: () => string };
+
 export default function OrbitCheckout(props: OrbitCheckoutProps): JSX.Element;
