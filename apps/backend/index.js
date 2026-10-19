@@ -38,9 +38,11 @@ const { registerCustomerPortalRoutes } = require('./customer-portal');
 const { registerFailureRecoveryRoutes } = require('./failure-recovery');
 const { registerAnalyticsRoutes } = require('./analytics');
 const { registerCouponRoutes, normalizeCode } = require('./coupons');
-const { registerGraphql } = require('./graphql');
+const { registerGraphql, attachGraphqlWebsocket } = require('./graphql');
 const { createSubscriptionEventBus } = require('./subscription-stream');
 const { registerHandoverRoutes } = require('./handover-sessions');
+const { createEventBus } = require('./event-bus');
+const http = require('http');
 const { configuredIndexer, registerIndexerRoutes } = require('./ledger-indexer');
 const { recordPullFailure, registerBillingResolutionRoutes } = require('./billing-resolution');
 const {
@@ -82,6 +84,7 @@ const { checkSchemaOnStartup } = require('./migrate');
 const { createInvoiceService, registerInvoiceRoutes } = require('./invoices');
 
 const app = express();
+app.locals.eventBus = createEventBus({ redisUrl: process.env.REDIS_URL });
 const feeEstimator = createFeeEstimator({ horizonUrl: process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org' });
 let defaultUsageBuffer;
 const getUsageBuffer = () => app.locals.usageBuffer || (defaultUsageBuffer ??= createUsageBufferFromEnv());
@@ -580,6 +583,7 @@ const applyPullOutcome = async ({
             }
 
             // Only emit settlement events for independently verified on-chain transfers.
+            let payment = null;
             const verifiedAmount = confirmedSettlementAmount(confirmation, {
                 customerWallet: sub.customer_wallet_address,
                 merchantWallet: merchant.wallet_address,
@@ -598,8 +602,9 @@ const applyPullOutcome = async ({
                     tx_hash: txHash,
                     settled_at: pullTime.toISOString(),
                 };
-                const { data: payment, error: paymentError } = await supabase
+                const { data: insertedPayment, error: paymentError } = await supabase
                     .from('payment_transactions').insert([paymentRecord]).select().single();
+                payment = insertedPayment;
                 if (paymentError && paymentError.code !== '23505') {
                     console.error('CRITICAL: on-chain settlement needs ledger reconciliation:', txHash, paymentError);
                 } else {
@@ -638,6 +643,20 @@ const applyPullOutcome = async ({
                 },
                 fetchImpl: app.locals.fetchImpl,
             });
+
+            if (app.locals.eventBus) {
+                app.locals.eventBus.publishPaymentSettled(sub.plans.merchant_id, {
+                    id: payment?.id || txHash,
+                    subscriptionId: subscription_id,
+                    planId: sub.plan_id,
+                    customerWalletAddress: sub.customer_wallet_address,
+                    amount: verifiedAmount || settledAmount,
+                    currency: sub.plans?.currency || 'USDC',
+                    txHash,
+                    status: 'settled',
+                    settledAt: pullTime.toISOString(),
+                }).catch((err) => console.error('Error publishing paymentSettled event:', err));
+            }
 
             // Automated revenue sharing (#160): forward each configured split
             // share from the merchant treasury, recording the primary pull hash
@@ -1223,6 +1242,17 @@ app.post('/subscriptions', async (req, res) => {
                 },
                 fetchImpl: app.locals.fetchImpl,
             });
+
+            if (app.locals.eventBus) {
+                app.locals.eventBus.publishSubscriptionCreated(merchantId, {
+                    id: data.id,
+                    subscriptionId: data.id,
+                    planId: plan_id,
+                    customerWalletAddress: customer_wallet_address,
+                    nextBillingDate,
+                    metadata: data.metadata,
+                }).catch((err) => console.error('Error publishing subscriptionCreated event:', err));
+            }
         }
 
         if (merchantId) {
@@ -1503,6 +1533,16 @@ app.post('/subscriptions/:id/cancel', authenticateMerchant, async (req, res) => 
                 },
                 fetchImpl: app.locals.fetchImpl,
             });
+
+            if (app.locals.eventBus) {
+                app.locals.eventBus.publishVaultCancelled(merchantId, {
+                    id,
+                    subscriptionId: id,
+                    planId: sub.plan_id,
+                    customerWalletAddress: sub.customer_wallet_address,
+                    reason: req.body?.reason || 'merchant_requested',
+                }).catch((err) => console.error('Error publishing vaultCancelled event:', err));
+            }
         }
 
         if (merchantId) {
@@ -2068,6 +2108,34 @@ registerTransactionExportRoute(
         return new Cursor(sql, values);
     },
 );
+
+// GraphQL WebSocket Subscription Server integration (#211)
+const originalListen = app.listen.bind(app);
+app.listen = function (...args) {
+    const server = http.createServer(this);
+    if (app.locals.attachGraphqlWebsocket) {
+        app.locals.wsSubscription = app.locals.attachGraphqlWebsocket(server);
+    } else {
+        app.locals.wsSubscription = attachGraphqlWebsocket(server, {
+            getSupabase,
+            eventBus: app.locals.eventBus,
+            challenges: app.locals.graphqlChallenges,
+        });
+    }
+    return server.listen(...args);
+};
+
+app.attachWebsocketServer = (server, opts = {}) => {
+    if (app.locals.attachGraphqlWebsocket) {
+        return app.locals.attachGraphqlWebsocket(server, opts);
+    }
+    return attachGraphqlWebsocket(server, {
+        getSupabase,
+        eventBus: app.locals.eventBus,
+        challenges: app.locals.graphqlChallenges,
+        ...opts,
+    });
+};
 
 const PORT = process.env.PORT || 3001;
 function startServer() {
