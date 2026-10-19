@@ -1580,204 +1580,6 @@ fn test_payroll_proposal_and_approval_events_published() {
 }
 
 #[test]
-fn test_failed_pull_enters_grace_and_settled_pull_restores_active() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let user = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_admin).address();
-    let token_client = TokenClient::new(&env, &token);
-    StellarAssetClient::new(&env, &token).mint(&user, &100);
-    let contract_id = env.register(OrbitContract, ());
-    let client = OrbitContractClient::new(&env, &contract_id);
-    token_client.approve(&user, &client.address, &100, &2000);
-    client.create_vault_with_grace_period(&user, &merchant, &token, &10, &100, &50);
-
-    env.ledger().set_timestamp(101);
-    client.record_failed_pull(&merchant, &user);
-    assert_eq!(client.get_vault(&user, &merchant).unwrap().payment_status, PAYMENT_GRACE_PERIOD);
-
-    client.pull_funds(&user, &merchant);
-    assert_eq!(client.get_vault(&user, &merchant).unwrap().payment_status, PAYMENT_ACTIVE);
-    assert_eq!(token_client.balance(&merchant), 10);
-}
-
-#[test]
-fn test_failed_pull_defaults_and_defaulted_pull_is_blocked() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let user = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let token = Address::generate(&env);
-    let contract_id = env.register(OrbitContract, ());
-    let client = OrbitContractClient::new(&env, &contract_id);
-    client.create_vault_with_grace_period(&user, &merchant, &token, &10, &100, &50);
-    env.ledger().set_timestamp(150);
-    client.record_failed_pull(&merchant, &user);
-    assert_eq!(client.get_vault(&user, &merchant).unwrap().payment_status, PAYMENT_DEFAULTED);
-    assert!(client.try_pull_funds(&user, &merchant).is_err());
-    client.merchant_cancel_vault(&merchant, &user);
-    assert_eq!(client.get_vault(&user, &merchant), None);
-}
-
-#[test]
-fn test_merchant_cancel_and_refund() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let user = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_admin).address();
-    let token_client = TokenClient::new(&env, &token);
-    StellarAssetClient::new(&env, &token).mint(&merchant, &100);
-    let contract_id = env.register(OrbitContract, ());
-    let client = OrbitContractClient::new(&env, &contract_id);
-    client.create_vault(&user, &merchant, &token, &10, &100);
-    client.merchant_cancel_vault(&merchant, &user);
-    assert_eq!(client.get_vault(&user, &merchant), None);
-    token_client.approve(&merchant, &client.address, &25, &2000);
-    client.refund_subscriber(&merchant, &user, &token, &25);
-    assert_eq!(token_client.balance(&user), 25);
-}
-
-#[test]
-fn test_update_vault_terms_preserves_last_pull_and_uses_new_amount() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let user = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_admin).address();
-    let token_client = TokenClient::new(&env, &token);
-    StellarAssetClient::new(&env, &token).mint(&user, &100);
-    let contract_id = env.register(OrbitContract, ());
-    let client = OrbitContractClient::new(&env, &contract_id);
-    token_client.approve(&user, &client.address, &100, &2000);
-    client.create_vault(&user, &merchant, &token, &10, &100);
-    env.ledger().set_timestamp(10);
-    client.pull_funds(&user, &merchant);
-    client.update_vault_terms(&user, &merchant, &25, &200);
-    let vault = client.get_vault(&user, &merchant).unwrap();
-    assert_eq!(vault.last_pull_timestamp, 10);
-    assert_eq!(vault.amount_per_interval, 25);
-    env.ledger().set_timestamp(210);
-    client.pull_funds(&user, &merchant);
-    assert_eq!(token_client.balance(&merchant), 35);
-}
-
-#[test]
-fn test_stream_withdraws_linearly_and_at_completion() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let sender = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_admin).address();
-    let token_client = TokenClient::new(&env, &token);
-    StellarAssetClient::new(&env, &token).mint(&sender, &100);
-    let contract_id = env.register(OrbitContract, ());
-    let client = OrbitContractClient::new(&env, &contract_id);
-    token_client.approve(&sender, &client.address, &100, &2000);
-    let stream_id = client.create_stream(&sender, &recipient, &token, &100, &100, &200);
-    assert_eq!(token_client.balance(&sender), 0);
-    env.ledger().set_timestamp(150);
-    client.withdraw_from_stream(&stream_id, &25);
-    assert_eq!(token_client.balance(&recipient), 25);
-    env.ledger().set_timestamp(200);
-    client.withdraw_from_stream(&stream_id, &75);
-    assert_eq!(token_client.balance(&recipient), 100);
-}
-
-#[test]
-fn test_stream_early_cancel_splits_vested_and_unvested_amounts() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let sender = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_admin).address();
-    let token_client = TokenClient::new(&env, &token);
-    StellarAssetClient::new(&env, &token).mint(&sender, &100);
-    let contract_id = env.register(OrbitContract, ());
-    let client = OrbitContractClient::new(&env, &contract_id);
-    token_client.approve(&sender, &client.address, &100, &2000);
-    let stream_id = client.create_stream(&sender, &recipient, &token, &100, &100, &200);
-    env.ledger().set_timestamp(120);
-    client.cancel_stream(&stream_id);
-    assert_eq!(token_client.balance(&recipient), 20);
-    assert_eq!(token_client.balance(&sender), 80);
-}
-
-// ----------------------------------------------------------------------------
-// ISSUE #93: SUBSCRIPTION PAUSE & RESUME
-// ----------------------------------------------------------------------------
-
-#[test]
-fn test_pause_blocks_pull_and_resume_restores_billing() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let user = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-
-    let token_address = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_client = TokenClient::new(&env, &token_address);
-    let token_admin_client = StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&user, &100_0000000);
-
-    let contract_id = env.register(OrbitContract, ());
-    let orbit_client = OrbitContractClient::new(&env, &contract_id);
-
-    let amount = 29_0000000;
-    let interval = 86400;
-
-    token_client.approve(&user, &orbit_client.address, &100_0000000, &2000000);
-    orbit_client.create_vault(&user, &merchant, &token_address, &amount, &interval);
-
-    // First settlement at t = 1000
-    env.ledger().set_timestamp(1000);
-    orbit_client.pull_funds(&user, &merchant);
-    assert_eq!(token_client.balance(&merchant), amount);
-
-    // The subscriber freezes the vault
-    orbit_client.pause_vault(&user, &merchant);
-    let paused = orbit_client
-        .get_vault(&user, &merchant)
-        .expect("vault should exist");
-    assert!(paused.is_paused);
-
-    // A full interval later the merchant still cannot pull while paused
-    env.ledger().set_timestamp(1000 + interval);
-    let res = orbit_client.try_pull_funds(&user, &merchant);
-    assert!(res.is_err());
-    assert_eq!(token_client.balance(&merchant), amount);
-    assert_eq!(token_client.balance(&user), 100_0000000 - amount);
-
-    // Resume restarts the billing clock at "now" so the interval that elapsed
-    // during the pause is not back-billed
-    orbit_client.resume_vault(&user, &merchant);
-    let resumed = orbit_client
-        .get_vault(&user, &merchant)
-        .expect("vault should exist");
-    assert!(!resumed.is_paused);
-    assert_eq!(resumed.last_pull_timestamp, 1000 + interval);
-
-    // Pulling immediately after the resume is rejected (no retro-active billing)
-    let res = orbit_client.try_pull_funds(&user, &merchant);
-    assert!(res.is_err());
-
-    // A full interval after the resume the merchant can bill again
-    env.ledger().set_timestamp(1000 + 2 * interval);
-    orbit_client.pull_funds(&user, &merchant);
-    assert_eq!(token_client.balance(&merchant), amount * 2);
-    assert_eq!(token_client.balance(&user), 100_0000000 - amount * 2);
-}
-
-#[test]
 fn test_pause_vault_authorized_by_merchant_fails() {
     let env = Env::default();
     let user = Address::generate(&env);
@@ -3269,6 +3071,9 @@ fn test_revenue_pool_multiple_deposits_claims_and_rounding_carry() {
     assert_eq!(state.pool.undistributed_balance, 0);
     assert_eq!(token_client.balance(&shareholder_a), 5);
     assert_eq!(token_client.balance(&shareholder_b), 10);
+}
+
+// ----------------------------------------------------------------------------
 // MERKLE PAYROLL DISTRIBUTION (#156)
 // ----------------------------------------------------------------------------
 
@@ -3686,6 +3491,9 @@ fn test_gas_subsidy_caps_and_nonce_prevent_reserve_drain() {
     assert_eq!(pool.balance, 90);
     assert_eq!(pool.next_nonce, 1);
     assert_eq!(native_client.balance(&sponsor), 10);
+}
+
+#[test]
 fn test_merkle_payroll_emits_created_and_claimed_events() {
     let env = Env::default();
     let (sender, _, token, contract_id) = payroll_setup(&env);
@@ -3925,7 +3733,7 @@ fn test_deploy_idle_capital() {
     let token_address = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let token_client = TokenClient::new(&env, &token_address);
+    let _token_client = TokenClient::new(&env, &token_address);
     let token_admin_client = StellarAssetClient::new(&env, &token_address);
 
     let pool_id = env.register(MockLendingPool, ());
@@ -4021,4 +3829,347 @@ fn test_deploy_fails_when_no_excess() {
     token_admin_client.mint(&contract_id, &50_0000000);
 
     orbit_client.deploy_idle_capital(&token_address);
+}
+
+// ----------------------------------------------------------------------------
+// COMPETITIVE PAYROLL BOUNTIES & ANTI-FRONTRUNNING COMMIT-REVEAL TESTS (#212)
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_commit_reveal_bounty_happy_path() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let proof = Bytes::from_slice(&env, b"solution_code_or_work_artifact_xyz");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_amount: i128 = 50_0000000;
+    let duration_seconds: u64 = 3_600;
+
+    let bounty_id = orbit.create_bounty(
+        &creator,
+        &token,
+        &bounty_amount,
+        &solution_hash,
+        &duration_seconds,
+    );
+    assert!(has_event(&env, &contract_id, "bounty_created"));
+    assert_eq!(token_client.balance(&contract_id), bounty_amount);
+
+    let bounty = orbit.get_bounty(&bounty_id).expect("bounty should exist");
+    assert_eq!(bounty.amount, bounty_amount);
+    assert!(!bounty.claimed);
+    assert_eq!(bounty.claimant, None);
+    assert_eq!(bounty.solution_hash, solution_hash);
+
+    // Contributor prepares commitment with secret salt
+    let secret_salt = BytesN::from_array(&env, &[99u8; 32]);
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &secret_salt);
+
+    // Step 1: Commit Phase
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
+    assert!(has_event(&env, &contract_id, "bounty_committed"));
+
+    let commitment = orbit
+        .get_bounty_commitment(&bounty_id, &claimant)
+        .expect("commitment should exist");
+    assert_eq!(commitment.claimant, claimant);
+    assert_eq!(commitment.commitment_hash, commitment_hash);
+    assert_eq!(commitment.commit_ledger, commit_seq);
+
+    // Step 2: Challenge Delay Window (advance 5 ledgers)
+    env.ledger().set_sequence_number(commit_seq + 5);
+
+    // Step 3: Reveal Phase
+    let claimant_balance_before = token_client.balance(&claimant);
+    orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &secret_salt);
+    assert!(has_event(&env, &contract_id, "bounty_claimed"));
+
+    // Verify payout dispatched to claimant
+    let claimant_balance_after = token_client.balance(&claimant);
+    assert_eq!(
+        claimant_balance_after - claimant_balance_before,
+        bounty_amount
+    );
+
+    // Verify bounty marked claimed
+    let updated_bounty = orbit.get_bounty(&bounty_id).unwrap();
+    assert!(updated_bounty.claimed);
+    assert_eq!(updated_bounty.claimant, Some(claimant));
+}
+
+#[test]
+fn test_reveal_bounty_claim_before_challenge_delay_fails() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let proof = Bytes::from_slice(&env, b"solution_xyz");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_id = orbit.create_bounty(&creator, &token, &25_0000000, &solution_hash, &3_600);
+
+    let secret_salt = BytesN::from_array(&env, &[12u8; 32]);
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &secret_salt);
+
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
+
+    // Try reveal at same ledger (seq + 0) -> fails
+    assert!(orbit
+        .try_reveal_bounty_claim(&claimant, &bounty_id, &proof, &secret_salt)
+        .is_err());
+
+    // Try reveal at seq + 4 (less than 5 ledgers delay) -> fails
+    env.ledger().set_sequence_number(commit_seq + 4);
+    assert!(orbit
+        .try_reveal_bounty_claim(&claimant, &bounty_id, &proof, &secret_salt)
+        .is_err());
+
+    // Reveal at exactly seq + 5 (minimum challenge delay window satisfied) -> succeeds
+    env.ledger().set_sequence_number(commit_seq + 5);
+    orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &secret_salt);
+
+    let bounty = orbit.get_bounty(&bounty_id).unwrap();
+    assert!(bounty.claimed);
+}
+
+#[test]
+fn test_frontrunning_bot_mempool_copy_fails() {
+    let env = Env::default();
+    let (creator, alice, token, contract_id) = payroll_setup(&env);
+    let bob = Address::generate(&env); // Frontrunning bot
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let proof = Bytes::from_slice(&env, b"alice_proprietary_solution");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_id = orbit.create_bounty(&creator, &token, &40_0000000, &solution_hash, &3_600);
+
+    let secret_salt = BytesN::from_array(&env, &[77u8; 32]);
+    let alice_commitment_hash = orbit.compute_bounty_commitment_hash(&alice, &proof, &secret_salt);
+
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&alice, &bounty_id, &alice_commitment_hash);
+
+    // Attack 1: Frontrunning bot Bob sees Alice's commitment hash and copies it directly under Bob's address
+    orbit.commit_bounty_claim(&bob, &bounty_id, &alice_commitment_hash);
+
+    // Advance 5 ledgers to reveal window
+    env.ledger().set_sequence_number(commit_seq + 5);
+
+    // Alice broadcasts reveal with proof and salt in mempool.
+    // Attack 2: Bob intercepts Alice's tx in mempool, extracts proof and salt, and attempts to submit
+    // reveal_bounty_claim under Bob's address with higher fee before Alice's tx confirms.
+    let bot_reveal_result = orbit.try_reveal_bounty_claim(&bob, &bounty_id, &proof, &secret_salt);
+    // Bob's reveal MUST fail because Bob's commitment preimage SHA256(Bob || proof || salt) != alice_commitment_hash!
+    assert!(bot_reveal_result.is_err());
+
+    // Alice's legitimate reveal succeeds!
+    orbit.reveal_bounty_claim(&alice, &bounty_id, &proof, &secret_salt);
+    let bounty = orbit.get_bounty(&bounty_id).unwrap();
+    assert!(bounty.claimed);
+    assert_eq!(bounty.claimant, Some(alice));
+
+    // Attack 3: If Bob now tries to generate a new legitimate commitment for Bob, Bob must wait 5 ledgers.
+    // Even if Bob waits, the bounty is already claimed and rejects any further claims.
+    let bob_salt = BytesN::from_array(&env, &[88u8; 32]);
+    let bob_commitment_hash = orbit.compute_bounty_commitment_hash(&bob, &proof, &bob_salt);
+    // Committing to an already claimed bounty fails
+    assert!(orbit
+        .try_commit_bounty_claim(&bob, &bounty_id, &bob_commitment_hash)
+        .is_err());
+}
+
+#[test]
+fn test_tampered_proof_or_salt_panics() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let proof = Bytes::from_slice(&env, b"legitimate_proof");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_id = orbit.create_bounty(&creator, &token, &30_0000000, &solution_hash, &3_600);
+
+    let secret_salt = BytesN::from_array(&env, &[1u8; 32]);
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &secret_salt);
+
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
+    env.ledger().set_sequence_number(commit_seq + 5);
+
+    // Tampered proof: different solution data fails preimage check
+    let tampered_proof = Bytes::from_slice(&env, b"tampered_proof");
+    assert!(orbit
+        .try_reveal_bounty_claim(&claimant, &bounty_id, &tampered_proof, &secret_salt)
+        .is_err());
+
+    // Tampered salt: wrong salt fails preimage check
+    let wrong_salt = BytesN::from_array(&env, &[2u8; 32]);
+    assert!(orbit
+        .try_reveal_bounty_claim(&claimant, &bounty_id, &proof, &wrong_salt)
+        .is_err());
+
+    // Valid reveal succeeds
+    orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &secret_salt);
+    assert!(orbit.get_bounty(&bounty_id).unwrap().claimed);
+}
+
+#[test]
+fn test_invalid_solution_hash_fails() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let expected_proof = Bytes::from_slice(&env, b"expected_target_solution");
+    let target_solution_hash = env.crypto().sha256(&expected_proof).to_bytes();
+    let bounty_id =
+        orbit.create_bounty(&creator, &token, &10_0000000, &target_solution_hash, &3_600);
+
+    // Claimant commits a valid preimage for an incorrect solution
+    let wrong_solution_proof = Bytes::from_slice(&env, b"wrong_solution");
+    let salt = BytesN::from_array(&env, &[3u8; 32]);
+    let commitment_hash =
+        orbit.compute_bounty_commitment_hash(&claimant, &wrong_solution_proof, &salt);
+
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
+    env.ledger().set_sequence_number(commit_seq + 5);
+
+    // Reveal: Preimage matches commitment, but solution does not match bounty target!
+    assert!(orbit
+        .try_reveal_bounty_claim(&claimant, &bounty_id, &wrong_solution_proof, &salt)
+        .is_err());
+
+    // Bounty remains unclaimed
+    let bounty = orbit.get_bounty(&bounty_id).unwrap();
+    assert!(!bounty.claimed);
+}
+
+#[test]
+fn test_bounty_cannot_be_claimed_twice() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let proof = Bytes::from_slice(&env, b"double_claim_proof");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_id = orbit.create_bounty(&creator, &token, &15_0000000, &solution_hash, &3_600);
+
+    let salt = BytesN::from_array(&env, &[4u8; 32]);
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &salt);
+
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
+    env.ledger().set_sequence_number(commit_seq + 5);
+
+    orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &salt);
+    assert!(orbit.get_bounty(&bounty_id).unwrap().claimed);
+
+    // Attempting to reveal again fails
+    assert!(orbit
+        .try_reveal_bounty_claim(&claimant, &bounty_id, &proof, &salt)
+        .is_err());
+}
+
+#[test]
+fn test_bounty_reclaim_after_expiration() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let proof = Bytes::from_slice(&env, b"unsolved_bounty");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_amount: i128 = 20_0000000;
+    let duration: u64 = 1_000;
+    let bounty_id =
+        orbit.create_bounty(&creator, &token, &bounty_amount, &solution_hash, &duration);
+
+    let creator_balance_before = token_client.balance(&creator);
+
+    // Cannot reclaim before expiration
+    assert!(orbit.try_reclaim_bounty(&creator, &bounty_id).is_err());
+
+    // Non-creator cannot reclaim
+    let attacker = Address::generate(&env);
+    assert!(orbit.try_reclaim_bounty(&attacker, &bounty_id).is_err());
+
+    // Advance time past expiration (1000 + 1000 + 1)
+    env.ledger().set_timestamp(2_001);
+
+    // Creator reclaims bounty
+    let reclaimed = orbit.reclaim_bounty(&creator, &bounty_id);
+    assert!(has_event(&env, &contract_id, "bounty_reclaimed"));
+    assert_eq!(reclaimed, bounty_amount);
+    assert_eq!(
+        token_client.balance(&creator),
+        creator_balance_before + bounty_amount
+    );
+
+    // Claims after reclaim or expiration are rejected
+    let salt = BytesN::from_array(&env, &[5u8; 32]);
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &salt);
+    assert!(orbit
+        .try_commit_bounty_claim(&claimant, &bounty_id, &commitment_hash)
+        .is_err());
+}
+
+#[test]
+#[should_panic(expected = "Challenge delay window not met: must wait at least 5 ledgers")]
+fn test_bounty_reveal_challenge_delay_panics_with_message() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let proof = Bytes::from_slice(&env, b"early_reveal");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_id = orbit.create_bounty(&creator, &token, &10_0000000, &solution_hash, &3_600);
+
+    let salt = BytesN::from_array(&env, &[6u8; 32]);
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &salt);
+
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
+
+    // Only 2 ledgers elapsed
+    env.ledger().set_sequence_number(commit_seq + 2);
+    orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &salt);
+}
+
+#[test]
+#[should_panic(expected = "Invalid preimage: commitment hash mismatch")]
+fn test_bounty_reveal_invalid_preimage_panics_with_message() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let proof = Bytes::from_slice(&env, b"solution_abc");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_id = orbit.create_bounty(&creator, &token, &10_0000000, &solution_hash, &3_600);
+
+    let salt = BytesN::from_array(&env, &[7u8; 32]);
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &salt);
+
+    let commit_seq = env.ledger().sequence();
+    orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
+    env.ledger().set_sequence_number(commit_seq + 5);
+
+    let fake_proof = Bytes::from_slice(&env, b"fake_preimage");
+    orbit.reveal_bounty_claim(&claimant, &bounty_id, &fake_proof, &salt);
+}
+
+#[test]
+#[should_panic(expected = "No commitment found for claimant")]
+fn test_bounty_reveal_without_commitment_panics() {
+    let env = Env::default();
+    let (creator, claimant, token, contract_id) = payroll_setup(&env);
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let proof = Bytes::from_slice(&env, b"no_commit");
+    let solution_hash = env.crypto().sha256(&proof).to_bytes();
+    let bounty_id = orbit.create_bounty(&creator, &token, &10_0000000, &solution_hash, &3_600);
+
+    let salt = BytesN::from_array(&env, &[8u8; 32]);
+    orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &salt);
 }

@@ -54,6 +54,9 @@ pub const MAX_OVERDRAFT_PERCENTAGE: u32 = 20;
 /// Challenge period between recovery initiation and execution.
 pub const RECOVERY_TIMELOCK_SECONDS: u64 = 14 * 24 * 60 * 60;
 
+/// Minimum ledgers (~25 seconds) that must pass between commit and reveal (#212)
+pub const BOUNTY_CHALLENGE_DELAY_LEDGERS: u32 = 5;
+
 /// Calculates (threshold, extend_to) in ledgers for vault persistent storage
 /// and contract instance storage based on interval_seconds.
 pub fn calculate_ttl_params(interval_seconds: u64) -> (u32, u32) {
@@ -188,6 +191,30 @@ pub struct MerklePayrollData {
     pub expiration_timestamp: u64,
 }
 
+/// Competitive payroll bounty data (#212): escrows reward tokens for tasks solved on-chain.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BountyData {
+    pub id: u64,
+    pub creator: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub solution_hash: BytesN<32>,
+    pub expiration_timestamp: u64,
+    pub claimed: bool,
+    pub claimant: Option<Address>,
+}
+
+/// Cryptographic claim commitment (#212): binds claimant address, solution proof, and secret salt
+/// to prevent mempool frontrunning bots from copying solutions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BountyCommitment {
+    pub claimant: Address,
+    pub commitment_hash: BytesN<32>,
+    pub commit_ledger: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -204,6 +231,12 @@ pub enum DataKey {
     MerkleClaimed(u64, BytesN<32>),
     /// Router a merchant has pre-approved for cross-asset subscriptions (#191)
     TrustedSwapRouter(Address, Address),
+    /// Id the next competitive bounty will receive (#212)
+    NextBountyId,
+    /// Competitive payroll bounty data: bounty_id -> BountyData (#212)
+    Bounty(u64),
+    /// Bounty commitment: (bounty_id, claimant) -> BountyCommitment (#212)
+    BountyCommitment(u64, Address),
 }
 
 /// Storage key for a metered (usage-based) vault (#46). An enum on purpose:
@@ -3146,7 +3179,10 @@ impl OrbitContract {
         liquidity_buffer: i128,
     ) {
         admin.require_auth();
-        assert!(liquidity_buffer >= 0, "Liquidity buffer must be non-negative");
+        assert!(
+            liquidity_buffer >= 0,
+            "Liquidity buffer must be non-negative"
+        );
 
         let key = FeatureKey::YieldStrategy;
         let config = YieldStrategyConfig {
@@ -3263,13 +3299,12 @@ impl OrbitContract {
             .as_ref()
             .expect("No yield pool configured");
         let contract_addr = env.current_contract_address();
-        let pool_client = LendingPoolClient::new(&env, &config.token);
+        let pool_client = LendingPoolClient::new(&env, pool_address);
 
         // Query the contract's balance in the lending pool
         let pool_balance = pool_client.balance_of(&config.token, &contract_addr);
         if pool_balance > 0 {
-            let pool = LendingPoolClient::new(&env, pool_address);
-            let recovered = pool.withdraw(&config.token, &pool_balance, &contract_addr);
+            let recovered = pool_client.withdraw(&config.token, &pool_balance, &contract_addr);
 
             config.total_deployed = 0;
             env.storage().persistent().set(&key, &config);
@@ -3283,9 +3318,224 @@ impl OrbitContract {
 
     /// Read the current yield strategy configuration. No authorization required.
     pub fn get_yield_strategy(env: Env) -> Option<YieldStrategyConfig> {
+        env.storage().persistent().get(&FeatureKey::YieldStrategy)
+    }
+
+    // --------------------------------------------------------------------
+    // COMPETITIVE PAYROLL BOUNTIES & ANTI-FRONTRUNNING COMMIT-REVEAL (#212)
+    // --------------------------------------------------------------------
+
+    /// Escrow `amount` of `token` for a competitive bounty requiring proof whose
+    /// SHA256 hash equals `solution_hash`. Returns the unique `bounty_id`.
+    pub fn create_bounty(
+        env: Env,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        solution_hash: BytesN<32>,
+        duration_seconds: u64,
+    ) -> u64 {
+        creator.require_auth();
+        assert!(amount > 0, "amount must be positive");
+        assert!(duration_seconds > 0, "duration must be positive");
+
+        let expiration_timestamp = env
+            .ledger()
+            .timestamp()
+            .checked_add(duration_seconds)
+            .expect("expiration overflow");
+
+        let counter_key = DataKey::NextBountyId;
+        let id: u64 = env.storage().instance().get(&counter_key).unwrap_or(0);
+        env.storage().instance().set(
+            &counter_key,
+            &id.checked_add(1).expect("Bounty ID exhausted"),
+        );
+
+        token::Client::new(&env, &token).transfer_from(
+            &env.current_contract_address(),
+            &creator,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        let bounty = BountyData {
+            id,
+            creator: creator.clone(),
+            token: token.clone(),
+            amount,
+            solution_hash: solution_hash.clone(),
+            expiration_timestamp,
+            claimed: false,
+            claimant: None,
+        };
+        save_bounty(&env, &bounty);
+
+        env.events().publish(
+            (Symbol::new(&env, "bounty_created"), creator, id),
+            (token, solution_hash, amount, expiration_timestamp),
+        );
+        id
+    }
+
+    /// Commit Phase: Contributor submits commitment hash:
+    /// `commitment_hash = SHA256(claimant || proof || secret_salt)`.
+    /// Records the commitment with current ledger sequence to enforce the
+    /// challenge delay window before reveal.
+    pub fn commit_bounty_claim(
+        env: Env,
+        claimant: Address,
+        bounty_id: u64,
+        commitment_hash: BytesN<32>,
+    ) {
+        claimant.require_auth();
+
+        let bounty = load_bounty(&env, bounty_id);
+        assert!(!bounty.claimed, "Bounty already claimed");
+        assert!(
+            env.ledger().timestamp() <= bounty.expiration_timestamp,
+            "Bounty has expired"
+        );
+
+        let commit_ledger = env.ledger().sequence();
+        let commitment = BountyCommitment {
+            claimant: claimant.clone(),
+            commitment_hash: commitment_hash.clone(),
+            commit_ledger,
+        };
+        save_bounty_commitment(&env, bounty_id, &claimant, &commitment);
+
+        env.events().publish(
+            (Symbol::new(&env, "bounty_committed"), claimant, bounty_id),
+            (commitment_hash, commit_ledger),
+        );
+    }
+
+    /// Reveal Phase: Contributor submits proof and secret salt.
+    /// Contract verifies:
+    /// 1. A commitment was recorded for `claimant`
+    /// 2. Challenge delay window (5 ledgers) has elapsed
+    /// 3. SHA256(claimant || proof || secret_salt) matches commitment_hash
+    /// 4. SHA256(proof) matches bounty solution_hash
+    /// Once verified, dispatches the token payout directly to `claimant`.
+    pub fn reveal_bounty_claim(
+        env: Env,
+        claimant: Address,
+        bounty_id: u64,
+        proof: Bytes,
+        secret_salt: BytesN<32>,
+    ) {
+        claimant.require_auth();
+
+        let mut bounty = load_bounty(&env, bounty_id);
+        assert!(!bounty.claimed, "Bounty already claimed");
+        assert!(
+            env.ledger().timestamp() <= bounty.expiration_timestamp,
+            "Bounty has expired"
+        );
+
+        let commitment_key = DataKey::BountyCommitment(bounty_id, claimant.clone());
+        let commitment: BountyCommitment = env
+            .storage()
+            .persistent()
+            .get(&commitment_key)
+            .expect("No commitment found for claimant");
+
+        assert!(
+            commitment.claimant == claimant,
+            "Mismatched claimant address"
+        );
+
+        let current_ledger = env.ledger().sequence();
+        assert!(
+            current_ledger
+                >= commitment
+                    .commit_ledger
+                    .saturating_add(BOUNTY_CHALLENGE_DELAY_LEDGERS),
+            "Challenge delay window not met: must wait at least 5 ledgers"
+        );
+
+        let computed_commitment = compute_bounty_commitment(&env, &claimant, &proof, &secret_salt);
+        assert!(
+            computed_commitment == commitment.commitment_hash,
+            "Invalid preimage: commitment hash mismatch"
+        );
+
+        let solution_hash = env.crypto().sha256(&proof).to_bytes();
+        assert!(
+            solution_hash == bounty.solution_hash,
+            "Invalid solution: does not match bounty target"
+        );
+
+        bounty.claimed = true;
+        bounty.claimant = Some(claimant.clone());
+        save_bounty(&env, &bounty);
+
+        token::Client::new(&env, &bounty.token).transfer(
+            &env.current_contract_address(),
+            &claimant,
+            &bounty.amount,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "bounty_claimed"), claimant, bounty_id),
+            (bounty.token, bounty.amount),
+        );
+    }
+
+    /// Reclaim an unclaimed bounty after its expiration timestamp has elapsed.
+    /// Only callable by the original bounty creator.
+    pub fn reclaim_bounty(env: Env, creator: Address, bounty_id: u64) -> i128 {
+        creator.require_auth();
+        let mut bounty = load_bounty(&env, bounty_id);
+        assert!(bounty.creator == creator, "Not the bounty creator");
+        assert!(!bounty.claimed, "Bounty already claimed");
+        assert!(
+            env.ledger().timestamp() > bounty.expiration_timestamp,
+            "Bounty has not expired yet"
+        );
+
+        bounty.claimed = true;
+        save_bounty(&env, &bounty);
+
+        let amount = bounty.amount;
+        token::Client::new(&env, &bounty.token).transfer(
+            &env.current_contract_address(),
+            &creator,
+            &amount,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "bounty_reclaimed"), creator, bounty_id),
+            (bounty.token, amount),
+        );
+        amount
+    }
+
+    /// Read bounty details. Requires no authorization.
+    pub fn get_bounty(env: Env, bounty_id: u64) -> Option<BountyData> {
+        env.storage().persistent().get(&DataKey::Bounty(bounty_id))
+    }
+
+    /// Read a contributor's commitment for a bounty. Requires no authorization.
+    pub fn get_bounty_commitment(
+        env: Env,
+        bounty_id: u64,
+        claimant: Address,
+    ) -> Option<BountyCommitment> {
         env.storage()
             .persistent()
-            .get(&FeatureKey::YieldStrategy)
+            .get(&DataKey::BountyCommitment(bounty_id, claimant))
+    }
+
+    /// Pure helper to compute commitment hash: `SHA256(claimant || proof || secret_salt)`.
+    pub fn compute_bounty_commitment_hash(
+        env: Env,
+        claimant: Address,
+        proof: Bytes,
+        secret_salt: BytesN<32>,
+    ) -> BytesN<32> {
+        compute_bounty_commitment(&env, &claimant, &proof, &secret_salt)
     }
 }
 
@@ -3413,6 +3663,52 @@ fn save_proposal(env: &Env, proposal: &PayrollProposal) {
     env.storage()
         .instance()
         .extend_ttl(TTL_THRESHOLD_LEDGERS, MIN_TTL_LEDGERS);
+}
+
+fn load_bounty(env: &Env, bounty_id: u64) -> BountyData {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Bounty(bounty_id))
+        .expect("Bounty does not exist")
+}
+
+fn save_bounty(env: &Env, bounty: &BountyData) {
+    let key = DataKey::Bounty(bounty.id);
+    env.storage().persistent().set(&key, bounty);
+    let remaining = bounty
+        .expiration_timestamp
+        .saturating_sub(env.ledger().timestamp());
+    let (threshold, extend_to) = calculate_ttl_params(remaining);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, threshold, extend_to);
+}
+
+fn save_bounty_commitment(
+    env: &Env,
+    bounty_id: u64,
+    claimant: &Address,
+    commitment: &BountyCommitment,
+) {
+    let key = DataKey::BountyCommitment(bounty_id, claimant.clone());
+    env.storage().persistent().set(&key, commitment);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD_LEDGERS, MIN_TTL_LEDGERS);
+}
+
+/// Computes `SHA256(claimant || proof || secret_salt)` preimage commitment (#212).
+pub fn compute_bounty_commitment(
+    env: &Env,
+    claimant: &Address,
+    proof: &Bytes,
+    secret_salt: &BytesN<32>,
+) -> BytesN<32> {
+    use soroban_sdk::xdr::ToXdr;
+    let mut preimage = claimant.clone().to_xdr(env);
+    preimage.append(proof);
+    preimage.extend_from_array(&secret_salt.to_array());
+    env.crypto().sha256(&preimage).to_bytes()
 }
 
 #[cfg(test)]
