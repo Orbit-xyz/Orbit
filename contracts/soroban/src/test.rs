@@ -3859,17 +3859,13 @@ fn test_commit_reveal_bounty_happy_path() {
 
     let bounty = orbit.get_bounty(&bounty_id).expect("bounty should exist");
     assert_eq!(bounty.amount, bounty_amount);
-    assert_eq!(bounty.claimed, false);
+    assert!(!bounty.claimed);
     assert_eq!(bounty.claimant, None);
     assert_eq!(bounty.solution_hash, solution_hash);
 
     // Contributor prepares commitment with secret salt
     let secret_salt = BytesN::from_array(&env, &[99u8; 32]);
-    let commitment_hash = orbit.compute_bounty_commitment_hash(
-        &claimant,
-        &proof,
-        &secret_salt,
-    );
+    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &proof, &secret_salt);
 
     // Step 1: Commit Phase
     let commit_seq = env.ledger().sequence();
@@ -3900,7 +3896,7 @@ fn test_commit_reveal_bounty_happy_path() {
 
     // Verify bounty marked claimed
     let updated_bounty = orbit.get_bounty(&bounty_id).unwrap();
-    assert_eq!(updated_bounty.claimed, true);
+    assert!(updated_bounty.claimed);
     assert_eq!(updated_bounty.claimant, Some(claimant));
 }
 
@@ -3936,7 +3932,7 @@ fn test_reveal_bounty_claim_before_challenge_delay_fails() {
     orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &secret_salt);
 
     let bounty = orbit.get_bounty(&bounty_id).unwrap();
-    assert_eq!(bounty.claimed, true);
+    assert!(bounty.claimed);
 }
 
 #[test]
@@ -3972,7 +3968,7 @@ fn test_frontrunning_bot_mempool_copy_fails() {
     // Alice's legitimate reveal succeeds!
     orbit.reveal_bounty_claim(&alice, &bounty_id, &proof, &secret_salt);
     let bounty = orbit.get_bounty(&bounty_id).unwrap();
-    assert_eq!(bounty.claimed, true);
+    assert!(bounty.claimed);
     assert_eq!(bounty.claimant, Some(alice));
 
     // Attack 3: If Bob now tries to generate a new legitimate commitment for Bob, Bob must wait 5 ledgers.
@@ -4016,7 +4012,7 @@ fn test_tampered_proof_or_salt_panics() {
 
     // Valid reveal succeeds
     orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &secret_salt);
-    assert_eq!(orbit.get_bounty(&bounty_id).unwrap().claimed, true);
+    assert!(orbit.get_bounty(&bounty_id).unwrap().claimed);
 }
 
 #[test]
@@ -4027,12 +4023,14 @@ fn test_invalid_solution_hash_fails() {
 
     let expected_proof = Bytes::from_slice(&env, b"expected_target_solution");
     let target_solution_hash = env.crypto().sha256(&expected_proof).to_bytes();
-    let bounty_id = orbit.create_bounty(&creator, &token, &10_0000000, &target_solution_hash, &3_600);
+    let bounty_id =
+        orbit.create_bounty(&creator, &token, &10_0000000, &target_solution_hash, &3_600);
 
     // Claimant commits a valid preimage for an incorrect solution
     let wrong_solution_proof = Bytes::from_slice(&env, b"wrong_solution");
     let salt = BytesN::from_array(&env, &[3u8; 32]);
-    let commitment_hash = orbit.compute_bounty_commitment_hash(&claimant, &wrong_solution_proof, &salt);
+    let commitment_hash =
+        orbit.compute_bounty_commitment_hash(&claimant, &wrong_solution_proof, &salt);
 
     let commit_seq = env.ledger().sequence();
     orbit.commit_bounty_claim(&claimant, &bounty_id, &commitment_hash);
@@ -4045,7 +4043,7 @@ fn test_invalid_solution_hash_fails() {
 
     // Bounty remains unclaimed
     let bounty = orbit.get_bounty(&bounty_id).unwrap();
-    assert_eq!(bounty.claimed, false);
+    assert!(!bounty.claimed);
 }
 
 #[test]
@@ -4066,7 +4064,7 @@ fn test_bounty_cannot_be_claimed_twice() {
     env.ledger().set_sequence_number(commit_seq + 5);
 
     orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &salt);
-    assert_eq!(orbit.get_bounty(&bounty_id).unwrap().claimed, true);
+    assert!(orbit.get_bounty(&bounty_id).unwrap().claimed);
 
     // Attempting to reveal again fails
     assert!(orbit
@@ -4085,7 +4083,8 @@ fn test_bounty_reclaim_after_expiration() {
     let solution_hash = env.crypto().sha256(&proof).to_bytes();
     let bounty_amount: i128 = 20_0000000;
     let duration: u64 = 1_000;
-    let bounty_id = orbit.create_bounty(&creator, &token, &bounty_amount, &solution_hash, &duration);
+    let bounty_id =
+        orbit.create_bounty(&creator, &token, &bounty_amount, &solution_hash, &duration);
 
     let creator_balance_before = token_client.balance(&creator);
 
@@ -4174,4 +4173,3 @@ fn test_bounty_reveal_without_commitment_panics() {
     let salt = BytesN::from_array(&env, &[8u8; 32]);
     orbit.reveal_bounty_claim(&claimant, &bounty_id, &proof, &salt);
 }
-

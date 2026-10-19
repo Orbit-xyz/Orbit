@@ -3179,7 +3179,10 @@ impl OrbitContract {
         liquidity_buffer: i128,
     ) {
         admin.require_auth();
-        assert!(liquidity_buffer >= 0, "Liquidity buffer must be non-negative");
+        assert!(
+            liquidity_buffer >= 0,
+            "Liquidity buffer must be non-negative"
+        );
 
         let key = FeatureKey::YieldStrategy;
         let config = YieldStrategyConfig {
@@ -3315,9 +3318,7 @@ impl OrbitContract {
 
     /// Read the current yield strategy configuration. No authorization required.
     pub fn get_yield_strategy(env: Env) -> Option<YieldStrategyConfig> {
-        env.storage()
-            .persistent()
-            .get(&FeatureKey::YieldStrategy)
+        env.storage().persistent().get(&FeatureKey::YieldStrategy)
     }
 
     // --------------------------------------------------------------------
@@ -3447,12 +3448,14 @@ impl OrbitContract {
 
         let current_ledger = env.ledger().sequence();
         assert!(
-            current_ledger >= commitment.commit_ledger.saturating_add(BOUNTY_CHALLENGE_DELAY_LEDGERS),
+            current_ledger
+                >= commitment
+                    .commit_ledger
+                    .saturating_add(BOUNTY_CHALLENGE_DELAY_LEDGERS),
             "Challenge delay window not met: must wait at least 5 ledgers"
         );
 
-        let computed_commitment =
-            compute_bounty_commitment(&env, &claimant, &proof, &secret_salt);
+        let computed_commitment = compute_bounty_commitment(&env, &claimant, &proof, &secret_salt);
         assert!(
             computed_commitment == commitment.commitment_hash,
             "Invalid preimage: commitment hash mismatch"
@@ -3511,9 +3514,7 @@ impl OrbitContract {
 
     /// Read bounty details. Requires no authorization.
     pub fn get_bounty(env: Env, bounty_id: u64) -> Option<BountyData> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Bounty(bounty_id))
+        env.storage().persistent().get(&DataKey::Bounty(bounty_id))
     }
 
     /// Read a contributor's commitment for a bounty. Requires no authorization.
