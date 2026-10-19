@@ -29,6 +29,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Contractor, duplicateWallets, mergeDuplicateRecipients, filterAndSortRecipients, parsePayrollAmount } from "@/lib/payroll";
 import { simulatePayrollRun } from "@/lib/payroll-simulation";
 import { PayrollSimulationModal } from "../modals/payroll-simulation-modal";
+import { MilestoneTrackerView } from "./milestone-tracker-view";
 
 const SAMPLE_RECIPIENTS: PayrollRecipient[] = [
   {
@@ -79,6 +80,7 @@ export function PayrollView() {
   const { can } = useTeam();
   const canRunPayroll = can("runPayroll");
   const { user } = useAuth();
+  const [payrollMode, setPayrollMode] = useState<"batch" | "milestone">("batch");
   const addressBookKey = user?.id ? `orbit_contractors:${user.id}` : null;
   const [contractors, setContractors] = useState<Contractor[]>([]);
   const [bookError, setBookError] = useState("");
@@ -364,8 +366,41 @@ export function PayrollView() {
 
   return (
     <div className="space-y-6">
-      {/* 1. Header with Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
+      {/* Top Mode Navigation Tabs */}
+      <div className="flex items-center gap-1.5 p-1 rounded-xl bg-neutral-100 border border-black/10 w-fit text-xs font-semibold">
+        <button
+          onClick={() => setPayrollMode("batch")}
+          className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg transition-all ${
+            payrollMode === "batch"
+              ? "bg-white text-black shadow-xs font-bold"
+              : "text-neutral-500 hover:text-black"
+          }`}
+        >
+          <Zap size={14} className={payrollMode === "batch" ? "text-black" : "text-neutral-400"} />
+          <span>Immediate Batch Engine</span>
+        </button>
+        <button
+          onClick={() => setPayrollMode("milestone")}
+          className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg transition-all ${
+            payrollMode === "milestone"
+              ? "bg-white text-black shadow-xs font-bold"
+              : "text-neutral-500 hover:text-black"
+          }`}
+        >
+          <ShieldCheck size={14} className={payrollMode === "milestone" ? "text-emerald-600" : "text-neutral-400"} />
+          <span>Milestone Escrow Tracker</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+            NEW
+          </span>
+        </button>
+      </div>
+
+      {payrollMode === "milestone" ? (
+        <MilestoneTrackerView />
+      ) : (
+        <>
+          {/* 1. Header with Actions */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-xl font-bold tracking-tight text-black">
@@ -772,6 +807,8 @@ export function PayrollView() {
         result={simulationResult}
         onClose={() => setIsSimulationOpen(false)}
       />
+        </>
+      )}
     </div>
   );
 }
