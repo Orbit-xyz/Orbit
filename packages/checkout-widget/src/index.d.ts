@@ -11,10 +11,11 @@ export interface OrbitCustomField {
 }
 
 export interface OrbitReadyEvent { type: 'orbit:ready'; planId?: string; }
-export interface OrbitWalletConnectedEvent { type: 'orbit:wallet_connected'; address: string; type?: 'wallet' | 'passkey'; isNew?: boolean; }
-export interface OrbitSubscribedEvent { type: 'orbit:subscribed'; subscriptionId?: string; planId?: string; txHash: string; metadata?: Record<string, any>; }
+export interface OrbitWalletConnectedEvent { type: 'orbit:wallet_connected'; address: string; type?: 'wallet' | 'passkey' | 'wallet_connect'; isNew?: boolean; }
+export interface OrbitSubscribedEvent { type: 'orbit:subscribed'; subscriptionId?: string; planId?: string; txHash: string; metadata?: Record<string, any>; couponCode?: string; }
 export interface OrbitErrorEvent { type: 'orbit:error'; message: string; }
 export interface OrbitCloseEvent { type: 'orbit:close'; }
+export interface OrbitBridgeFundsArrivedEvent { type: 'orbit:bridge_funds_arrived'; address: string; balance: number; }
 
 export interface OrbitCheckoutProps {
   planId?: string;
@@ -33,6 +34,10 @@ export interface OrbitCheckoutProps {
   customClasses?: OrbitCustomClasses;
   allowedOrigins?: string[];
   customFields?: OrbitCustomField[];
+  walletConnectProjectId?: string;
+  termsUrl?: string;
+  privacyUrl?: string;
+  requireConsent?: boolean;
 }
 
 export interface DelegatedSessionKey {
