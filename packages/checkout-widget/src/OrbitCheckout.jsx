@@ -20,10 +20,21 @@ import {
   SessionWalletAdapter,
   SMART_WALLET_ID,
 } from './sessionKey';
+import {
+  isMobileBrowser,
+  MOBILE_WALLET_APPS,
+  mobileAppStoreUrl,
+  openMobileWalletApp,
+  createWalletConnectModule,
+} from './mobileWallet';
+import { BRIDGE_SOURCE_CHAINS, allbridgeUrl, watchForBridgedFunds } from './bridge';
 
 const STORAGE_KEY = 'orbit:selected-wallet';
 const PENDING_KEY = 'orbit:pending-transaction';
+const MOBILE_CONNECT_KEY = 'orbit:mobile-connect-pending';
+const MOBILE_CONNECT_EXPIRY_MS = 10 * 60 * 1000;
 const PASSKEY_WALLET_ID = 'orbit:passkey';
+const WALLET_CONNECT_ID = 'wallet_connect';
 const WALLET_MODULES = [
   [FREIGHTER_ID, 'Freighter', FreighterModule],
   [ALBEDO_ID, 'Albedo', AlbedoModule],
@@ -55,8 +66,19 @@ export default function OrbitCheckout({
   customClasses = {},
   allowedOrigins = [],
   customFields = [],
+  walletConnectProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID,
+  termsUrl = '',
+  privacyUrl = '',
+  requireConsent = false,
 }) {
+  const isMobile = useMemo(() => isMobileBrowser(), []);
   const walletChoices = useMemo(() => WALLET_MODULES.filter(([id]) => allowedWallets.includes(id)), [allowedWallets]);
+  // Freighter/xBull need a desktop browser extension; LOBSTR/Hana get their own deep-link
+  // buttons on mobile instead of their (non-functional there) extension-based connect.
+  const extensionWalletChoices = useMemo(
+    () => (isMobile ? walletChoices.filter(([id]) => ![FREIGHTER_ID, XBULL_ID, LOBSTR_ID, HANA_ID].includes(id)) : walletChoices),
+    [walletChoices, isMobile],
+  );
   const [plan, setPlan] = useState(planData || null);
   const [loading, setLoading] = useState(!planData);
   const [error, setError] = useState('');
@@ -97,10 +119,30 @@ export default function OrbitCheckout({
   const [swapQuote, setSwapQuote] = useState(null);
   const [swapQuoteError, setSwapQuoteError] = useState('');
   const [swapQuoteLoading, setSwapQuoteLoading] = useState(false);
+  const [balanceRefreshTick, setBalanceRefreshTick] = useState(0);
+
+  // Cross-chain bridge (#223)
+  const [bridgeOpen, setBridgeOpen] = useState(false);
+  const [bridgeWatching, setBridgeWatching] = useState(false);
+  const [bridgeArrived, setBridgeArrived] = useState(false);
+  const [bridgeError, setBridgeError] = useState('');
+  const [bridgeAddressCopied, setBridgeAddressCopied] = useState(false);
+  const bridgeWatcher = useRef(null);
 
   // Custom Form Fields & Validation
   const [formData, setFormData] = useState({});
   const [formErrors, setFormErrors] = useState({});
+
+  // Terms of Service / GDPR recurring-billing consent (#221)
+  const [consentChecked, setConsentChecked] = useState(false);
+  const consentSatisfied = !requireConsent || consentChecked;
+
+  // Coupon code validation (#222)
+  const [couponOpen, setCouponOpen] = useState(false);
+  const [couponCode, setCouponCode] = useState('');
+  const [couponApplying, setCouponApplying] = useState(false);
+  const [couponError, setCouponError] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState(null);
 
   // Network Detection & Auto-switching
   const [isWrongNetwork, setIsWrongNetwork] = useState(false);
@@ -115,6 +157,10 @@ export default function OrbitCheckout({
   const [isSessionKey, setIsSessionKey] = useState(false);
   const [sessionData, setSessionData] = useState(null);
   const hasSessionKey = useMemo(() => isSessionKeySupported(), []);
+
+  // Mobile deep-linking & handoff recovery (#220)
+  const [walletConnectModule, setWalletConnectModule] = useState(null);
+  const [resumingMobileWallet, setResumingMobileWallet] = useState(null);
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -176,6 +222,39 @@ export default function OrbitCheckout({
     }
   };
 
+  // USDC plans quote raw 7-decimal token units; fiat plans quote major units directly.
+  const formatPlanAmount = (amount, currency) => (currency === 'USDC' ? Number(amount) / 10000000 : Number(amount)).toFixed(2);
+
+  const applyCoupon = async () => {
+    const code = couponCode.trim();
+    if (!code) return;
+    setCouponApplying(true);
+    setCouponError('');
+    try {
+      const response = await fetch(`${apiUrl}/coupons/validate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ plan_id: plan.id || planId, code }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.valid) {
+        throw new Error(payload.error || 'This coupon code is not valid for this plan.');
+      }
+      setAppliedCoupon(payload);
+    } catch (reason) {
+      setAppliedCoupon(null);
+      setCouponError(reason.message || 'Could not validate this coupon code.');
+    } finally {
+      setCouponApplying(false);
+    }
+  };
+
+  const removeCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponError('');
+  };
+
   const checkNetwork = async () => {
     try {
       const details = await getNetworkDetails();
@@ -214,7 +293,23 @@ export default function OrbitCheckout({
   };
 
   useEffect(() => {
-    StellarWalletsKit.init({ modules: walletChoices.map(([, , Module]) => new Module()) });
+    if (!walletConnectProjectId) { setWalletConnectModule(null); return undefined; }
+    let cancelled = false;
+    createWalletConnectModule({
+      projectId: walletConnectProjectId,
+      networkPassphrase,
+      appName: plan?.merchants?.name,
+      appUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
+    })
+      .then((module) => { if (!cancelled) setWalletConnectModule(module); })
+      .catch((reason) => console.warn('WalletConnect unavailable:', reason.message));
+    return () => { cancelled = true; };
+  }, [walletConnectProjectId, networkPassphrase, plan?.merchants?.name]);
+
+  useEffect(() => {
+    const modules = walletChoices.map(([, , Module]) => new Module());
+    if (walletConnectModule) modules.push(walletConnectModule);
+    StellarWalletsKit.init({ modules });
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved === PASSKEY_WALLET_ID) {
       // Attempt auto-reconnect passkey
@@ -236,8 +331,17 @@ export default function OrbitCheckout({
           checkNetwork();
         })
         .catch(() => {});
+    } else if (saved === WALLET_CONNECT_ID && walletConnectModule) {
+      StellarWalletsKit.setWallet(WALLET_CONNECT_ID);
+      StellarWalletsKit.getAddress()
+        .then(({ address: value }) => {
+          setAddress(value);
+          dispatch('orbit:wallet_connected', { address: value, type: 'wallet_connect' });
+          checkNetwork();
+        })
+        .catch(() => {});
     }
-  }, [walletChoices]);
+  }, [walletChoices, walletConnectModule]);
 
   useEffect(() => {
     if (planData || !planId) return undefined;
@@ -256,6 +360,13 @@ export default function OrbitCheckout({
   useEffect(() => {
     if (plan) dispatch('orbit:ready', { planId: plan.id || planId });
   }, [plan, planId]);
+
+  // A coupon validated against one plan is not valid for another.
+  useEffect(() => {
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponError('');
+  }, [plan?.id]);
 
   // Scanning the QR opens the same merchant checkout page inside the mobile
   // wallet's DApp browser. The server-resolved plan overrides desktop defaults.
@@ -309,8 +420,54 @@ export default function OrbitCheckout({
     return undefined;
   }, [rpcUrl]);
 
+  // Restore a mobile app-switch handoff (#220): we left for LOBSTR/Hana's own app and may be
+  // returning to this same tab, or to a reloaded one if the OS reclaimed it under memory pressure.
+  useEffect(() => {
+    const saved = localStorage.getItem(MOBILE_CONNECT_KEY);
+    if (!saved) return;
+    let parsed;
+    try { parsed = JSON.parse(saved); } catch { localStorage.removeItem(MOBILE_CONNECT_KEY); return; }
+    if (!parsed?.walletId || Date.now() - parsed.startedAt > MOBILE_CONNECT_EXPIRY_MS) {
+      localStorage.removeItem(MOBILE_CONNECT_KEY);
+      return;
+    }
+    setResumingMobileWallet(parsed.walletId);
+  }, []);
+
+  useEffect(() => {
+    if (!resumingMobileWallet || address) return undefined;
+    const walletKitId = resumingMobileWallet === 'hana' ? HANA_ID : LOBSTR_ID;
+    const tryResume = async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      try {
+        StellarWalletsKit.setWallet(walletKitId);
+        const result = await StellarWalletsKit.getAddress();
+        localStorage.setItem(STORAGE_KEY, walletKitId);
+        localStorage.removeItem(MOBILE_CONNECT_KEY);
+        setAddress(result.address);
+        setResumingMobileWallet(null);
+        dispatch('orbit:wallet_connected', { address: result.address });
+        await checkNetwork();
+      } catch {
+        // Not connected yet - the user may still be inside the wallet app, or it never opened.
+      }
+    };
+    document.addEventListener('visibilitychange', tryResume);
+    tryResume();
+    return () => document.removeEventListener('visibilitychange', tryResume);
+  }, [resumingMobileWallet, address]);
+
+  const cancelMobileResume = () => {
+    localStorage.removeItem(MOBILE_CONNECT_KEY);
+    setResumingMobileWallet(null);
+  };
+
   const handleOpenWallets = () => {
     if (!validateForm()) return;
+    if (!consentSatisfied) {
+      setError('Please agree to the Terms of Service and billing authorization before connecting a wallet.');
+      return;
+    }
     setShowWallets(true);
   };
 
@@ -332,6 +489,24 @@ export default function OrbitCheckout({
       setError(message);
       dispatch('orbit:error', { message });
     }
+  };
+
+  // Best-effort deep link into the LOBSTR/Hana native app (#220). Neither scheme is guaranteed
+  // to be registered, so this degrades to an install prompt rather than failing silently.
+  const handleMobileAppConnect = (walletId) => {
+    setError('');
+    setShowWallets(false);
+    localStorage.setItem(MOBILE_CONNECT_KEY, JSON.stringify({ walletId, startedAt: Date.now() }));
+    setResumingMobileWallet(walletId);
+    openMobileWalletApp(walletId, {
+      onMissing: () => {
+        localStorage.removeItem(MOBILE_CONNECT_KEY);
+        setResumingMobileWallet(null);
+        const appName = MOBILE_WALLET_APPS[walletId]?.name || 'That wallet app';
+        const storeUrl = mobileAppStoreUrl(walletId);
+        setError(`${appName} didn't open${storeUrl ? ' - install it from the app store' : ''}, or try WalletConnect instead.`);
+      },
+    });
   };
 
   const connectPasskey = async () => {
@@ -385,6 +560,14 @@ export default function OrbitCheckout({
     if (!isDemo && !passkeyAdapter) await StellarWalletsKit.disconnect().catch(() => {});
     if (isSessionKey) revokeSessionKey();
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(MOBILE_CONNECT_KEY);
+    setResumingMobileWallet(null);
+    bridgeWatcher.current?.stop();
+    bridgeWatcher.current = null;
+    setBridgeOpen(false);
+    setBridgeWatching(false);
+    setBridgeArrived(false);
+    setBridgeError('');
     setAddress('');
     setPasskeyAdapter(null);
     setSessionData(null);
@@ -415,7 +598,85 @@ export default function OrbitCheckout({
       .then((balances) => { if (!cancelled) setPayWithBalances(balances); })
       .catch(() => { if (!cancelled) setPayWithBalances([]); });
     return () => { cancelled = true; };
-  }, [address, horizonUrl, payWithAssets, isDemo]);
+  }, [address, horizonUrl, payWithAssets, isDemo, balanceRefreshTick]);
+
+  useEffect(() => () => bridgeWatcher.current?.stop(), []);
+
+  // Starts watching the connected Stellar address for the bridged USDC to land, so the
+  // handshake resumes on its own instead of the customer having to refresh and recheck.
+  const startBridgeWatch = () => {
+    if (!planCurrency) return;
+    bridgeWatcher.current?.stop();
+    setBridgeError('');
+    setBridgeArrived(false);
+    setBridgeWatching(true);
+    const baseline = Number(payWithBalances.find((asset) => asset.code === PLAN_CURRENCY_CODE)?.balance || 0);
+    bridgeWatcher.current = watchForBridgedFunds({
+      fetchBalance: async () => {
+        const balances = await fetchPayWithBalances({ horizonUrl, address, assets: payWithAssets });
+        return Number(balances.find((asset) => asset.code === PLAN_CURRENCY_CODE)?.balance || 0);
+      },
+      baseline,
+      onArrived: (balance) => {
+        setBridgeWatching(false);
+        setBridgeArrived(true);
+        setBridgeOpen(false);
+        setBalanceRefreshTick((tick) => tick + 1);
+        dispatch('orbit:bridge_funds_arrived', { address, balance });
+      },
+      onTimeout: () => {
+        setBridgeWatching(false);
+        setBridgeError('Still watching for your transfer? Bridges can take longer during congestion - use Check again once it confirms on Allbridge.');
+      },
+      onError: (watchError) => {
+        // Transient Horizon hiccups should not stop the watch; it keeps retrying on the next tick.
+        console.warn('Bridge balance check unavailable:', watchError.message);
+      },
+    });
+  };
+
+  const stopBridgeWatch = () => {
+    bridgeWatcher.current?.stop();
+    bridgeWatcher.current = null;
+    setBridgeWatching(false);
+  };
+
+  const copyBridgeAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setBridgeAddressCopied(true);
+      setTimeout(() => setBridgeAddressCopied(false), 2000);
+    } catch {
+      // Clipboard access can be blocked (permissions, insecure context); the address is still selectable text.
+    }
+  };
+
+  const checkBridgeNow = async () => {
+    setBridgeError('');
+    try {
+      const balances = await fetchPayWithBalances({ horizonUrl, address, assets: payWithAssets });
+      const balance = Number(balances.find((asset) => asset.code === PLAN_CURRENCY_CODE)?.balance || 0);
+      const baseline = Number(payWithBalances.find((asset) => asset.code === PLAN_CURRENCY_CODE)?.balance || 0);
+      if (balance > baseline) {
+        stopBridgeWatch();
+        setBridgeArrived(true);
+        setBridgeOpen(false);
+        setBalanceRefreshTick((tick) => tick + 1);
+        dispatch('orbit:bridge_funds_arrived', { address, balance });
+      } else {
+        setBridgeError('No new USDC has arrived on Stellar yet.');
+      }
+    } catch (reason) {
+      setBridgeError(reason.message || 'Could not check your Stellar balance.');
+    }
+  };
+
+  // Starts watching the moment the bridge modal opens, so the customer only has to
+  // switch to Allbridge and back - no extra click is needed to begin the handshake resume.
+  useEffect(() => {
+    if (bridgeOpen && !bridgeWatching && !bridgeArrived) startBridgeWatch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridgeOpen]);
 
   // Re-quote when the pay-with asset, slippage, or plan changes (debounced)
   useEffect(() => {
@@ -456,6 +717,10 @@ export default function OrbitCheckout({
   }, [isSwap, selectedPayWith, slippagePct, plan, planCurrency, horizonUrl]);
 
   const startHandover = async () => {
+    if (!consentSatisfied) {
+      setError('Please agree to the Terms of Service and billing authorization before connecting a wallet.');
+      return;
+    }
     if (!plan?.id || !apiUrl) { setError('A live plan and payment API are required for mobile handover.'); return; }
     if (typeof window === 'undefined') return;
     setError(''); setHandoverBusy(true);
@@ -498,6 +763,10 @@ export default function OrbitCheckout({
 
   const subscribe = async () => {
     if (!validateForm()) return;
+    if (!consentSatisfied) {
+      setError('Please agree to the Terms of Service and billing authorization before subscribing.');
+      return;
+    }
     if (isWrongNetwork) {
       setError('Please switch to the matching network before subscribing.');
       return;
@@ -584,6 +853,7 @@ export default function OrbitCheckout({
           plan_id: plan.id || planId,
           customer_wallet_address: address,
           metadata: formData,
+          coupon_code: appliedCoupon?.code,
         }),
       });
 
@@ -608,6 +878,7 @@ export default function OrbitCheckout({
         planId: plan.id || planId,
         txHash: hashes.vaultHash,
         metadata: formData,
+        couponCode: appliedCoupon?.code,
       });
     } catch (reason) {
       if (reason instanceof PendingTransactionError) {
@@ -651,6 +922,11 @@ export default function OrbitCheckout({
   if (!plan) return <div role="alert" className={customClasses.modal} style={{ ...styles.card, ...rootStyle }}>{error || 'Plan not found.'}</div>;
 
   const targetNetworkName = networkPassphrase === Networks.PUBLIC ? 'Mainnet' : 'Testnet';
+  const planAmountUsdc = (Number(plan.usdc_amount) / 10000000).toFixed(2);
+  const planIntervalDays = Math.max(1, Math.round(Number(plan.interval_seconds) / 86400));
+  const couponDiscountPct = appliedCoupon
+    ? Math.round((Number(appliedCoupon.savings) / Number(appliedCoupon.original_amount)) * 100)
+    : 0;
 
   return (
     <section className={`orbit-checkout-root ${customClasses.modal || ''}`} style={{ ...styles.card, ...rootStyle }} aria-label="Orbit checkout">
@@ -661,6 +937,31 @@ export default function OrbitCheckout({
         }
         .orbit-checkout-root .orbit-wrong-network {
           border-color: #f59e0b; background: rgba(245, 158, 11, 0.08);
+        }
+        .orbit-checkout-root .orbit-consent {
+          margin: 16px 0; padding: 12px; border: 1px solid var(--orbit-border); border-radius: var(--orbit-radius);
+        }
+        .orbit-checkout-root .orbit-consent a { color: var(--orbit-accent); }
+        .orbit-checkout-root .orbit-coupon-toggle {
+          background: none; border: 0; padding: 0; color: var(--orbit-accent); font-size: 13px; font-weight: 600;
+          cursor: pointer; text-decoration: underline;
+        }
+        .orbit-checkout-root .orbit-coupon-row { display: flex; gap: 8px; margin-top: 8px; }
+        .orbit-checkout-root .orbit-coupon-row input {
+          flex: 1; min-width: 0; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--orbit-border);
+          border-radius: var(--orbit-radius); background: var(--orbit-surface); color: var(--orbit-text); font-family: inherit; font-size: 14px;
+          text-transform: uppercase;
+        }
+        .orbit-checkout-root .orbit-discount-pill {
+          display: inline-block; margin-left: 8px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+          background: rgba(16, 185, 129, 0.12); color: #059669; vertical-align: middle;
+        }
+        .orbit-checkout-root .orbit-price-original { color: var(--orbit-muted); text-decoration: line-through; font-weight: 500; font-size: 18px; margin-right: 8px; }
+        .orbit-checkout-root .orbit-bridge-chains { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+        .orbit-checkout-root .orbit-bridge-address {
+          display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin: 8px 0;
+          border: 1px solid var(--orbit-border); border-radius: var(--orbit-radius); background: var(--orbit-surface);
+          font-family: monospace; font-size: 12px; word-break: break-all;
         }
         .orbit-checkout-root .orbit-confirming { color: var(--orbit-accent); font-weight: 600; }
         .orbit-checkout-root .orbit-field { margin-bottom: 12px; text-align: left; }
@@ -679,8 +980,87 @@ export default function OrbitCheckout({
         <h2>{plan.name}</h2>
       </div>
 
-      <p style={styles.price}>${(Number(plan.usdc_amount) / 10000000).toFixed(2)} USDC</p>
-      <p>Billed every {Math.max(1, Math.round(Number(plan.interval_seconds) / 86400))} days</p>
+      {appliedCoupon ? (
+        <p style={styles.price}>
+          <span className="orbit-price-original">${formatPlanAmount(appliedCoupon.original_amount, appliedCoupon.currency)} {appliedCoupon.currency}</span>
+          ${formatPlanAmount(appliedCoupon.discounted_amount, appliedCoupon.currency)} {appliedCoupon.currency}
+          <span className="orbit-discount-pill">{couponDiscountPct}% OFF applied</span>
+        </p>
+      ) : (
+        <p style={styles.price}>${planAmountUsdc} USDC</p>
+      )}
+      <p>Billed every {planIntervalDays} days</p>
+
+      {/* Coupon code (#222) */}
+      {!receipt && (
+        <div className="orbit-coupon">
+          {!couponOpen && !appliedCoupon && (
+            <button type="button" className="orbit-coupon-toggle" onClick={() => setCouponOpen(true)}>
+              Have a coupon code?
+            </button>
+          )}
+          {appliedCoupon && (
+            <p style={{ fontSize: 13, color: 'var(--orbit-text)', margin: 0 }}>
+              Coupon <strong>{appliedCoupon.code}</strong> applied
+              {appliedCoupon.duration_months > 1 ? ` for ${appliedCoupon.duration_months} months` : ''}.{' '}
+              <button type="button" className="orbit-coupon-toggle" onClick={removeCoupon}>Remove</button>
+            </p>
+          )}
+          {couponOpen && !appliedCoupon && (
+            <div className="orbit-coupon-row">
+              <input
+                type="text"
+                placeholder="Coupon code"
+                aria-label="Coupon code"
+                value={couponCode}
+                onChange={(e) => { setCouponCode(e.target.value); if (couponError) setCouponError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyCoupon(); } }}
+                disabled={couponApplying || processing || confirming}
+              />
+              <button
+                type="button"
+                style={{ ...styles.wallet, width: 'auto', padding: '10px 16px', marginBottom: 0 }}
+                disabled={!couponCode.trim() || couponApplying || processing || confirming}
+                onClick={applyCoupon}
+              >
+                {couponApplying ? 'Checking...' : 'Apply'}
+              </button>
+            </div>
+          )}
+          {couponError && <div className="orbit-field-error" role="alert">{couponError}</div>}
+        </div>
+      )}
+
+      {/* Terms of Service / GDPR recurring-billing consent (#221) */}
+      {requireConsent && !receipt && (
+        <div className="orbit-consent" role="group" aria-label="Billing consent">
+          <label htmlFor="orbit-consent-checkbox" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+            <input
+              id="orbit-consent-checkbox"
+              type="checkbox"
+              checked={consentChecked}
+              onChange={(e) => setConsentChecked(e.target.checked)}
+              disabled={processing || confirming}
+              required
+              aria-required="true"
+              style={{ marginTop: 3, flexShrink: 0 }}
+            />
+            <span style={{ fontSize: 13, textAlign: 'left', color: 'var(--orbit-text)' }}>
+              I agree to the{' '}
+              {termsUrl ? (
+                <a href={termsUrl} target="_blank" rel="noreferrer">Terms of Service</a>
+              ) : 'Terms of Service'}
+              {privacyUrl && (
+                <>
+                  {' '}and{' '}
+                  <a href={privacyUrl} target="_blank" rel="noreferrer">Privacy Policy</a>
+                </>
+              )}
+              {' '}and authorize recurring billing of {planAmountUsdc} USDC every {planIntervalDays} days until cancelled.
+            </span>
+          </label>
+        </div>
+      )}
 
       {/* Pay With selector and live swap quote (#191) */}
       {address && !receipt && payWithBalances.length > 1 && (
@@ -722,6 +1102,26 @@ export default function OrbitCheckout({
               </label>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Cross-chain bridge entry point (#223) */}
+      {address && !receipt && !isDemo && !bridgeOpen && !bridgeWatching && (
+        <p style={{ marginBottom: 16 }}>
+          <button type="button" className="orbit-coupon-toggle" onClick={() => { setBridgeError(''); setBridgeOpen(true); }}>
+            Need USDC on Stellar? Bridge from Ethereum, Polygon, Arbitrum or Solana
+          </button>
+        </p>
+      )}
+      {address && !receipt && !bridgeOpen && bridgeWatching && (
+        <p role="status" style={{ marginBottom: 16, fontSize: 13, color: 'var(--orbit-muted)' }}>
+          Watching your Stellar wallet for bridged USDC…{' '}
+          <button type="button" className="orbit-coupon-toggle" onClick={() => setBridgeOpen(true)}>View</button>
+        </p>
+      )}
+      {bridgeArrived && (
+        <div role="status" className="orbit-fee">
+          Bridged USDC has arrived in your Stellar wallet. You're ready to continue below.
         </div>
       )}
 
@@ -823,7 +1223,13 @@ export default function OrbitCheckout({
         </div>
       ) : (
         !pending &&
-        (handoverSession ? (
+        (resumingMobileWallet ? (
+          <div role="status" aria-live="polite" className="orbit-pending">
+            <h3>Waiting for {MOBILE_WALLET_APPS[resumingMobileWallet]?.name}</h3>
+            <p>Approve the connection in the app, then switch back to this tab to continue.</p>
+            <button style={styles.cancel} onClick={cancelMobileResume}>Cancel</button>
+          </div>
+        ) : handoverSession ? (
           <div role="status" aria-live="polite" className="orbit-mobile-handover">
             <h3>Scan with your mobile Stellar wallet</h3>
             <p>Open this checkout in your wallet's mobile DApp browser (LOBSTR or Albedo), connect your wallet and approve the plan.</p>
@@ -846,12 +1252,14 @@ export default function OrbitCheckout({
             {isDemo && <p role="note">Demo mode never signs transactions or creates a subscription.</p>}
             <button
               className={customClasses.button}
-              style={{ ...styles.button, opacity: isWrongNetwork ? 0.6 : 1 }}
-              disabled={processing || isWrongNetwork || (isSwap && (!swapQuote || swapQuoteLoading))}
+              style={{ ...styles.button, opacity: isWrongNetwork || !consentSatisfied ? 0.6 : 1 }}
+              disabled={processing || isWrongNetwork || !consentSatisfied || (isSwap && (!swapQuote || swapQuoteLoading))}
               onClick={subscribe}
             >
               {processing
                 ? 'Preparing transaction...'
+                : !consentSatisfied
+                ? 'Agree to terms to continue'
                 : isWrongNetwork
                 ? `Switch to ${targetNetworkName} to continue`
                 : isDemo
@@ -865,11 +1273,11 @@ export default function OrbitCheckout({
           </>
         ) : (
           <div>
-            <button className={customClasses.button} style={styles.button} onClick={handleOpenWallets}>
-              Connect wallet
+            <button className={customClasses.button} style={{ ...styles.button, opacity: consentSatisfied ? 1 : 0.6 }} disabled={!consentSatisfied} onClick={handleOpenWallets}>
+              {consentSatisfied ? 'Connect wallet' : 'Agree to terms to continue'}
             </button>
-            {!incomingChannelId && (
-              <button style={{ ...styles.wallet, marginTop: 12 }} disabled={handoverBusy} onClick={startHandover}>
+            {!incomingChannelId && !isMobile && (
+              <button style={{ ...styles.wallet, marginTop: 12 }} disabled={handoverBusy || !consentSatisfied} onClick={startHandover}>
                 {handoverBusy ? 'Creating secure QR session…' : 'Scan with Mobile Wallet'}
               </button>
             )}
@@ -883,11 +1291,32 @@ export default function OrbitCheckout({
       {showWallets && (
         <div role="dialog" aria-modal="true" aria-labelledby="wallet-title" style={styles.dialog}>
           <h3 id="wallet-title">Choose Payment Method</h3>
-          {!incomingChannelId && (
-            <button style={{ ...styles.wallet, borderColor: 'var(--orbit-accent)' }} disabled={handoverBusy} onClick={startHandover}>
+          {!incomingChannelId && !isMobile && (
+            <button style={{ ...styles.wallet, borderColor: 'var(--orbit-accent)' }} disabled={handoverBusy || !consentSatisfied} onClick={startHandover}>
               {handoverBusy ? 'Creating secure QR session…' : '📱 Scan with Mobile Wallet'}
               <small style={{ display: 'block', color: 'var(--orbit-muted)' }}>Continue in LOBSTR or Albedo on your phone</small>
             </button>
+          )}
+
+          {/* Mobile-native deep links (#220): extensions (Freighter, xBull) do not exist on
+              phones, so a mobile browser gets app deep links and WalletConnect instead. */}
+          {isMobile && !incomingChannelId && (
+            <>
+              {walletConnectModule && (
+                <button style={{ ...styles.wallet, borderColor: 'var(--orbit-accent)' }} disabled={!consentSatisfied} onClick={() => connect(WALLET_CONNECT_ID)}>
+                  🔗 WalletConnect
+                  <small style={{ display: 'block', color: 'var(--orbit-muted)' }}>Deep-links into LOBSTR, Hana and other supported wallet apps</small>
+                </button>
+              )}
+              <button style={styles.wallet} disabled={!consentSatisfied} onClick={() => handleMobileAppConnect('lobstr')}>
+                Open in LOBSTR app
+                <small style={{ display: 'block', color: 'var(--orbit-muted)' }}>Switches to the LOBSTR app to approve</small>
+              </button>
+              <button style={styles.wallet} disabled={!consentSatisfied} onClick={() => handleMobileAppConnect('hana')}>
+                Open in Hana app
+                <small style={{ display: 'block', color: 'var(--orbit-muted)' }}>Switches to the Hana Wallet app to approve</small>
+              </button>
+            </>
           )}
 
           {/* Smart Wallet Session Key Option (#169) */}
@@ -899,6 +1328,7 @@ export default function OrbitCheckout({
                 background: 'rgba(16, 185, 129, 0.08)',
                 marginBottom: 12,
               }}
+              disabled={!consentSatisfied}
               onClick={connectSessionKey}
             >
               <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, color: '#059669' }}>
@@ -919,6 +1349,7 @@ export default function OrbitCheckout({
                 background: 'rgba(99, 102, 241, 0.08)',
                 marginBottom: 12,
               }}
+              disabled={!consentSatisfied}
               onClick={connectPasskey}
             >
               <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -928,12 +1359,14 @@ export default function OrbitCheckout({
             </button>
           )}
 
-          <div style={{ fontSize: 12, color: 'var(--orbit-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            Or connect a Stellar wallet
-          </div>
+          {extensionWalletChoices.length > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--orbit-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {isMobile ? 'Or connect with a mobile-ready wallet' : 'Or connect a Stellar wallet'}
+            </div>
+          )}
 
-          {walletChoices.map(([id, name]) => (
-            <button key={id} style={styles.wallet} onClick={() => connect(id)}>
+          {extensionWalletChoices.map(([id, name]) => (
+            <button key={id} style={styles.wallet} disabled={!consentSatisfied} onClick={() => connect(id)}>
               {name}
             </button>
           ))}
@@ -941,6 +1374,7 @@ export default function OrbitCheckout({
           {demo && (
             <button
               style={styles.wallet}
+              disabled={!consentSatisfied}
               onClick={() => {
                 setAddress(DEMO_ADDRESS);
                 setIsDemo(true);
@@ -961,6 +1395,63 @@ export default function OrbitCheckout({
           >
             Cancel
           </button>
+        </div>
+      )}
+
+      {/* Cross-chain bridge modal (#223) */}
+      {bridgeOpen && (
+        <div role="dialog" aria-modal="true" aria-labelledby="bridge-title" style={styles.dialog}>
+          <h3 id="bridge-title">Bridge USDC to Stellar</h3>
+          <p style={{ fontSize: 13, color: 'var(--orbit-muted)' }}>
+            Opens Allbridge in a new tab to move USDC from Ethereum, Polygon, Arbitrum or Solana onto Stellar.
+            Allbridge is a separate, non-custodial bridge - Orbit never holds your funds in transit.
+          </p>
+
+          <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>1. Paste this as the recipient address on Allbridge</p>
+          <div className="orbit-bridge-address">
+            <span style={{ flex: 1 }}>{address}</span>
+            <button type="button" style={{ ...styles.cancel, padding: '4px 8px', flexShrink: 0 }} onClick={copyBridgeAddress}>
+              {bridgeAddressCopied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+
+          <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>2. Choose where you're bridging from</p>
+          <div className="orbit-bridge-chains">
+            {BRIDGE_SOURCE_CHAINS.map((chain) => (
+              <a
+                key={chain.id}
+                href={allbridgeUrl(chain.id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ ...styles.wallet, display: 'block', textAlign: 'center', textDecoration: 'none' }}
+              >
+                {chain.name}
+              </a>
+            ))}
+          </div>
+
+          <p style={{ fontSize: 13, color: 'var(--orbit-muted)' }}>
+            3. Complete the transfer on Allbridge, choosing USDC and Stellar as the destination. We'll pick it up automatically once it lands.
+          </p>
+
+          {bridgeWatching && (
+            <p role="status" style={{ fontSize: 13, color: 'var(--orbit-accent)', fontWeight: 600 }}>
+              Watching your Stellar wallet for bridged USDC…
+            </p>
+          )}
+          {bridgeError && <div className="orbit-field-error" role="alert">{bridgeError}</div>}
+
+          <button type="button" style={styles.wallet} onClick={checkBridgeNow}>Check again</button>
+          <button
+            type="button"
+            style={styles.cancel}
+            onClick={() => setBridgeOpen(false)}
+          >
+            {bridgeWatching ? 'Keep watching in the background' : 'Close'}
+          </button>
+          {bridgeWatching && (
+            <button type="button" style={styles.cancel} onClick={stopBridgeWatch}>Stop watching</button>
+          )}
         </div>
       )}
     </section>
