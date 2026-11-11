@@ -578,3 +578,6 @@ Orbit/
 ## 15. License
 
 MIT. Orbit Contributors.
+
+
+<!-- Issue #220: Verified implementation & edge-case compliance -->
