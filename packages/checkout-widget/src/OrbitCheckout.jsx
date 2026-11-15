@@ -28,6 +28,8 @@ import {
   createWalletConnectModule,
 } from './mobileWallet';
 import { BRIDGE_SOURCE_CHAINS, allbridgeUrl, watchForBridgedFunds } from './bridge';
+import MobileHandoverModal from './MobileHandoverModal';
+import ReceiptView from './ReceiptView';
 
 const STORAGE_KEY = 'orbit:selected-wallet';
 const PENDING_KEY = 'orbit:pending-transaction';
@@ -84,6 +86,7 @@ export default function OrbitCheckout({
   const [error, setError] = useState('');
   const [address, setAddress] = useState('');
   const [showWallets, setShowWallets] = useState(false);
+  const [showMobileHandover, setShowMobileHandover] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [receipt, setReceipt] = useState(null);
   const [handoverSession, setHandoverSession] = useState(null);
@@ -578,6 +581,53 @@ export default function OrbitCheckout({
     dispatch('orbit:close');
   };
 
+  const handleMobileConfirmed = async (confirmation) => {
+    setShowMobileHandover(false);
+    setShowWallets(false);
+    const customerAddr = confirmation.customerWalletAddress || confirmation.customer_wallet_address || DEMO_ADDRESS;
+    setAddress(customerAddr);
+
+    const hashes = {
+      vaultHash: confirmation.txHash || confirmation.tx_hash,
+      subscriptionId: confirmation.subscriptionId || confirmation.subscription_id,
+      handover: true,
+      recovered: false,
+    };
+
+    // If subscription was not already persisted by mobile backend flow, create it now
+    if (!hashes.subscriptionId && plan) {
+      try {
+        const response = await fetch(`${apiUrl}/subscriptions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            plan_id: plan.id || planId,
+            customer_wallet_address: customerAddr,
+            metadata: { ...formData, handover: true },
+          }),
+        });
+        if (response.ok) {
+          const subscription = await response.json();
+          hashes.subscriptionId = subscription.id;
+        }
+      } catch (err) {
+        console.warn('Subscription registration after mobile handover failed:', err);
+      }
+    }
+
+    localStorage.removeItem(PENDING_KEY);
+    setPending(null);
+    setReceipt(hashes);
+    dispatch('orbit:wallet_connected', { address: customerAddr, type: 'mobile-handover' });
+    dispatch('orbit:subscribed', {
+      subscriptionId: hashes.subscriptionId,
+      planId: plan?.id || planId,
+      txHash: hashes.vaultHash,
+      metadata: formData,
+      handover: true,
+    });
+  };
+
   const payWithAssets = useMemo(() => payWithAssetsFor(networkPassphrase), [networkPassphrase]);
   const horizonUrl = useMemo(() => horizonUrlFor(networkPassphrase), [networkPassphrase]);
   const planCurrency = useMemo(() => payWithAssets.find((asset) => asset.code === PLAN_CURRENCY_CODE), [payWithAssets]);
@@ -814,7 +864,8 @@ export default function OrbitCheckout({
       } else if (isSessionKey || passkeyAdapter) {
         // Smart wallet sessions use a single atomic, sponsor-eligible handshake.
         hashes = await authorizePlanAtomic({
-          wallet: activeWallet, address,
+          wallet: activeWallet,
+          address,
           merchantAddress: plan.merchants.wallet_address,
           amount: plan.usdc_amount, intervalSeconds: plan.interval_seconds,
           orbitContractId, tokenContractId, rpcUrl, networkPassphrase,
@@ -825,13 +876,36 @@ export default function OrbitCheckout({
           },
           onProgress: ({ remainingMs }) => setConfirmingSeconds(Math.ceil(remainingMs / 1000)),
         });
+      } else if (isSwap) {
+        hashes = {
+          approvalHash: null,
+          vaultHash: await authorizeSwapPlan({
+            wallet: activeWallet,
+            address,
+            merchantAddress: plan.merchants.wallet_address,
+            amount: plan.usdc_amount,
+            intervalSeconds: plan.interval_seconds,
+            orbitContractId,
+            settlementTokenContractId: tokenContractId,
+            paymentTokenContractId: assetContractId(selectedPayWith, networkPassphrase),
+            routerAddress: plan.swap_router_address,
+            maxInputStroops: swapQuote.maxInputStroops,
+            rpcUrl,
+            networkPassphrase,
+            onSubmitted: ({ stage, hash }) => {
+              localStorage.setItem(PENDING_KEY, JSON.stringify({ stage, hash, planId: plan.id || planId }));
+              setPending({ stage, hash });
+            },
+            onProgress: ({ remainingMs }) => setConfirmingSeconds(Math.ceil(remainingMs / 1000)),
+          }),
+        };
       } else {
         const preflight = await preflightPlan({
           address, merchantAddress: plan.merchants.wallet_address,
           amount: plan.usdc_amount, intervalSeconds: plan.interval_seconds,
           orbitContractId, tokenContractId, rpcUrl, networkPassphrase,
         });
-        setFeeEstimate(preflight);
+        if (preflight) setFeeEstimate(preflight);
         hashes = await authorizePlan({
           wallet: activeWallet, address,
           merchantAddress: plan.merchants.wallet_address,
@@ -1209,18 +1283,14 @@ export default function OrbitCheckout({
       )}
 
       {receipt ? (
-        <div ref={successElement} role="status" aria-live="polite">
-          <h3>{receipt.demo ? 'Demo complete - nothing was signed' : receipt.recovered ? 'Vault transaction confirmed' : 'Subscription active'}</h3>
-          {receipt.recovered && <p>Check with the merchant that your subscription was recorded. A confirmed transaction alone does not prove the subscription record exists.</p>}
-          {receipt.mobile && <p>Mobile wallet approval verified on Stellar.</p>}
-          {receipt.vaultHash && (
-            <a href={`https://stellar.expert/explorer/testnet/tx/${receipt.vaultHash}`} target="_blank" rel="noreferrer">
-              View vault transaction
-            </a>
-          )}
-          <br />
-          <button style={styles.cancel} onClick={disconnect}>Start over</button>
-        </div>
+        <ReceiptView
+          receipt={receipt}
+          plan={plan}
+          customerAddress={address}
+          accentColor={accentColor}
+          networkPassphrase={networkPassphrase}
+          onClose={disconnect}
+        />
       ) : (
         !pending &&
         (resumingMobileWallet ? (
@@ -1272,15 +1342,33 @@ export default function OrbitCheckout({
             <button style={styles.cancel} onClick={disconnect}>Disconnect</button>
           </>
         ) : (
-          <div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <button className={customClasses.button} style={{ ...styles.button, opacity: consentSatisfied ? 1 : 0.6 }} disabled={!consentSatisfied} onClick={handleOpenWallets}>
               {consentSatisfied ? 'Connect wallet' : 'Agree to terms to continue'}
             </button>
             {!incomingChannelId && !isMobile && (
-              <button style={{ ...styles.wallet, marginTop: 12 }} disabled={handoverBusy || !consentSatisfied} onClick={startHandover}>
+              <button style={{ ...styles.wallet, marginTop: 4 }} disabled={handoverBusy || !consentSatisfied} onClick={startHandover}>
                 {handoverBusy ? 'Creating secure QR session…' : 'Scan with Mobile Wallet'}
               </button>
             )}
+            <button
+              style={{
+                ...styles.wallet,
+                textAlign: 'center',
+                margin: 0,
+                padding: '10px 14px',
+                fontSize: 13,
+                fontWeight: 600,
+                color: 'var(--orbit-accent)',
+                borderColor: 'var(--orbit-border)',
+              }}
+              onClick={() => {
+                if (!validateForm()) return;
+                setShowMobileHandover(true);
+              }}
+            >
+              📱 Scan with Mobile Wallet (QR Code)
+            </button>
           </div>
         ))
       )}
@@ -1358,6 +1446,27 @@ export default function OrbitCheckout({
               <small style={{ color: 'var(--orbit-muted)' }}>1-touch checkout with Touch ID, Face ID or Windows Hello</small>
             </button>
           )}
+
+          {/* Desktop-to-Mobile Handover Option (#210) */}
+          <button
+            style={{
+              ...styles.wallet,
+              borderColor: '#3b82f6',
+              background: 'rgba(59, 130, 246, 0.08)',
+              marginBottom: 12,
+            }}
+            onClick={() => {
+              setShowWallets(false);
+              setShowMobileHandover(true);
+            }}
+          >
+            <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, color: '#2563eb' }}>
+              <span>📱 Scan with Mobile Wallet</span>
+            </div>
+            <small style={{ color: 'var(--orbit-muted)' }}>
+              Scan dynamic QR code with Lobstr, Albedo, or WalletConnect on your phone
+            </small>
+          </button>
 
           {extensionWalletChoices.length > 0 && (
             <div style={{ fontSize: 12, color: 'var(--orbit-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
@@ -1453,6 +1562,20 @@ export default function OrbitCheckout({
             <button type="button" style={styles.cancel} onClick={stopBridgeWatch}>Stop watching</button>
           )}
         </div>
+      )}
+
+      {/* Desktop-to-Mobile Handover Modal (#210) */}
+      {showMobileHandover && (
+        <MobileHandoverModal
+          plan={plan}
+          planId={planId}
+          apiUrl={apiUrl}
+          networkPassphrase={networkPassphrase}
+          accentColor={accentColor}
+          demo={demo || isDemo}
+          onConfirmed={handleMobileConfirmed}
+          onClose={() => setShowMobileHandover(false)}
+        />
       )}
     </section>
   );
