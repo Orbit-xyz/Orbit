@@ -80,6 +80,15 @@ import {
   clearPendingSession,
 } from "./pendingSession"; // #265
 import { createTranslator } from "./i18n"; // #264
+import {
+  buildShareText,
+  cadenceLabel,
+  downloadReceiptPng,
+  explorerTxUrl,
+  farcasterShareUrl,
+  shortHash,
+  xShareUrl,
+} from "./receiptCard";
 
 const STORAGE_KEY = "orbit:selected-wallet";
 const PENDING_KEY = "orbit:pending-transaction";
@@ -222,6 +231,34 @@ export default function OrbitCheckout({
     return undefined;
   }, [receipt]);
 
+  // Confetti celebration (#294): lazy-loaded, respects reduced motion, cleaned up on dismissal
+  useEffect(() => {
+    if (!receipt || receipt.demo || receipt.recovered) return undefined;
+    let cancelled = false;
+    let confettiModule = null;
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!reduced) {
+      import("canvas-confetti")
+        .then(({ default: confetti }) => {
+          if (cancelled) return;
+          confettiModule = confetti;
+          confetti({
+            particleCount: isMobile ? 40 : 90,
+            spread: 70,
+            origin: { y: 0.6 },
+            disableForReducedMotion: true,
+          });
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+      confettiModule?.reset(); // removes the canvas element
+    };
+  }, [receipt, isMobile]);
+
   // Multi-asset payment (#191): balances, selected pay-with asset, and live swap quote
   const [payWithBalances, setPayWithBalances] = useState([]);
   const [payWithKey, setPayWithKey] = useState("");
@@ -323,6 +360,7 @@ export default function OrbitCheckout({
       });
     } else if (type === "orbit:close") {
       checkoutBridge.current?.send({ type: CHECKOUT_EVENTS.closed });
+    }
     if (typeof window === 'undefined') return;
     const normalizedType = type === 'orbit:subscribed' ? 'orbit:success' : type;
     window.dispatchEvent(new CustomEvent(normalizedType, {
@@ -1883,13 +1921,60 @@ export default function OrbitCheckout({
           {receipt.mobile && <p>Mobile wallet approval verified on Stellar.</p>}
           {receipt.vaultHash && (
             <a
-              href={`https://stellar.expert/explorer/testnet/tx/${receipt.vaultHash}`}
+              href={explorerTxUrl(receipt.vaultHash, networkPassphrase === Networks.PUBLIC)}
               target="_blank"
               rel="noreferrer"
             >
               View vault transaction
             </a>
           )}
+          {receipt.vaultHash && !receipt.demo && (() => {
+            const isMainnet = networkPassphrase === Networks.PUBLIC;
+            const details = {
+              merchant: plan.merchants?.name || "Orbit merchant",
+              plan: plan.name,
+              amount: `${planAmountUsdc} USDC`,
+              cadence: cadenceLabel(plan.interval_seconds),
+              hash: receipt.vaultHash,
+            };
+            const shareText = buildShareText(plan.name);
+            return (
+              <div className="orbit-receipt-badge" aria-label="Subscription receipt">
+                <dl style={{ textAlign: "left", margin: "12px 0" }}>
+                  <dt>Merchant</dt><dd>{details.merchant}</dd>
+                  <dt>Plan</dt><dd>{details.plan}</dd>
+                  <dt>Amount</dt><dd>{details.amount}</dd>
+                  <dt>Cadence</dt><dd>{details.cadence}</dd>
+                  <dt>Transaction</dt>
+                  <dd>
+                    <a
+                      href={explorerTxUrl(details.hash, isMainnet)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={details.hash}
+                    >
+                      {shortHash(details.hash)}
+                    </a>
+                  </dd>
+                </dl>
+                <a href={xShareUrl(shareText)} target="_blank" rel="noopener noreferrer">
+                  Share on X
+                </a>
+                {" · "}
+                <a href={farcasterShareUrl(shareText)} target="_blank" rel="noopener noreferrer">
+                  Share on Farcaster
+                </a>
+                <br />
+                <button
+                  type="button"
+                  style={styles.cancel}
+                  onClick={() => downloadReceiptPng(details).catch(() => setError("Could not save receipt."))}
+                >
+                  Download receipt (PNG)
+                </button>
+              </div>
+            );
+          })()}
           <br />
           <button style={styles.cancel} onClick={disconnect}>
             Start over
