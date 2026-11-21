@@ -44,7 +44,7 @@ describe('Database Schema & Row Level Security (RLS) Policies', () => {
 
   it('allows public read (SELECT) only on plans and merchants for checkout', () => {
     const selectPolicies = schemaSql.match(/CREATE\s+POLICY[\s\S]*?ON\s+(\w+)\s+FOR\s+SELECT/gi) || [];
-    expect(selectPolicies.length).toBe(2);
+    expect(selectPolicies.length).toBe(3);
 
     expect(schemaSql).toMatch(/CREATE\s+POLICY[\s\S]*?ON\s+merchants\s+FOR\s+SELECT/i);
     expect(schemaSql).toMatch(/CREATE\s+POLICY[\s\S]*?ON\s+plans\s+FOR\s+SELECT/i);

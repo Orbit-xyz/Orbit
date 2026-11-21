@@ -249,6 +249,8 @@ CREATE TABLE IF NOT EXISTS signing_sessions (
 );
 CREATE INDEX IF NOT EXISTS signing_sessions_merchant_status_idx ON signing_sessions (merchant_id, status);
 ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP WITH TIME ZONE;
+<<<<<<< HEAD
+=======
 
 -- Fiat-denominated plans & exchange rate oracle cache (#96)
 --
@@ -279,9 +281,34 @@ CREATE INDEX IF NOT EXISTS exchange_rates_pair_fetched_at_idx
     ON exchange_rates (base_currency, quote_currency, fetched_at DESC);
 -- Backend-only: service role bypasses RLS, no public policy is defined.
 ALTER TABLE exchange_rates ENABLE ROW LEVEL SECURITY;
+>>>>>>> upstream/main
 
--- Atomically claims an idempotency key. Returns {"claimed": true, "record": ...}
--- when the caller now owns the key and must execute the request, or
+-- 10. Invoices Table
+-- Stores billing invoices for merchant subscriptions, with cryptographic
+-- verification signatures and PDF watermark data for document integrity.
+CREATE TABLE invoices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merchant_id UUID NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+    invoice_id VARCHAR(255) NOT NULL UNIQUE,
+    amount NUMERIC NOT NULL,
+    currency VARCHAR(32) NOT NULL DEFAULT 'USDC',
+    status VARCHAR(50) NOT NULL DEFAULT 'pending', -- 'pending', 'paid', 'cancelled', 'expired'
+    merchant_address VARCHAR(255) NOT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+    verification_hash VARCHAR(64) NOT NULL, -- SHA-256 hex digest of invoice params
+    verification_status VARCHAR(50) NOT NULL DEFAULT 'verified', -- 'verified', 'tampered', 'invalid_signature'
+    pdf_watermark TEXT, -- Embedded watermark data (QR code + merchant info)
+    signed_pdf_url TEXT, -- URL to the signed PDF document
+    settled_at TIMESTAMP WITH TIME ZONE,
+    settlement_transaction VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_invoices_merchant_id ON invoices (merchant_id);
+CREATE INDEX idx_invoices_status ON invoices (status);
+CREATE INDEX idx_invoices_invoice_id ON invoices (invoice_id);
+
+-- 11. Tax Transactions Table
 -- {"claimed": false, "record": ...} with the existing record otherwise.
 -- An existing record is taken over only when it has expired, or when it belongs to
 -- the same request (path + body hash) and either failed or was abandoned
@@ -495,6 +522,11 @@ CREATE POLICY "Allow public read access to merchants for checkout"
 
 CREATE POLICY "Allow public read access to plans for checkout"
     ON plans FOR SELECT
+    USING (true);
+
+-- Allow public read access to invoices for checkout verification
+CREATE POLICY "Allow public read access to invoices for verification"
+    ON invoices FOR SELECT
     USING (true);
 
 -- No public policies for subscriptions, idempotency_keys, billing_locks, api_keys, audit_logs, webhooks, or webhook_deliveries:

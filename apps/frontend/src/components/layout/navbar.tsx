@@ -10,7 +10,11 @@ import { useTranslations } from "next-intl";
 import { Brand } from "./brand";
 import { useAuth } from "@/lib/auth-context";
 import { DOCS_URL } from "@/lib/links";
+<<<<<<< HEAD
+import { CurrencyRateTicker } from "@/components/layout/CurrencyRateTicker";
+=======
 import { LocaleSwitcher } from "./locale-switcher";
+>>>>>>> upstream/main
 
 export function Navbar() {
   const t = useTranslations("Nav");
@@ -78,6 +82,7 @@ export function Navbar() {
               >
                 {t("signOut")}
               </button>
+              <CurrencyRateTicker />
             </div>
           ) : (
             <>
