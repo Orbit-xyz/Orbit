@@ -264,6 +264,9 @@ export function DashboardShell() {
         type: "error",
         message: "Failed to copy settlement address to clipboard",
       });
+    }
+  };
+
   const requestTestnetFaucet = async () => {
     if (!user.walletAddress || activeNetwork !== "stellar-testnet") return;
     setFaucetBusy(true);
@@ -742,16 +745,14 @@ export function DashboardShell() {
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
-        onNavigate={(tab) => {
+        onNavigateTab={(tab) => {
           setActiveTab(tab);
           setIsMobileMenuOpen(false);
         }}
         onOpenCreatePlan={() => setIsCreatePlanOpen(true)}
         onDisbursePayroll={handleDisbursePayroll}
         onCopySettlementAddress={handleCopySettlementAddress}
-        plans={plans}
-        subscribers={subscribers}
-        settlementAddress={user.linkedVaults?.stellar || user.walletAddress || ""}
+        user={user}
       />
 
       {/* Create Plan Modal (#308 Quick Action) */}
