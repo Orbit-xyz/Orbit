@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -96,6 +96,103 @@ export function DashboardShell() {
   const [businessNameInput, setBusinessNameInput] = useState("");
   const [faucetStatus, setFaucetStatus] = useState<string | null>(null);
   const [faucetBusy, setFaucetBusy] = useState(false);
+  type LiveStatus = "connected" | "reconnecting" | "disconnected";
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>("disconnected");
+  const [lostConnectionAt, setLostConnectionAt] = useState<number | null>(null);
+  const liveSocketRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const liveReconnectRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL;
+    if (!wsUrl) {
+      setLiveStatus("disconnected");
+      setLostConnectionAt(Date.now());
+      return undefined;
+    }
+
+    let disposed = false;
+
+    const connect = () => {
+      if (disposed) return;
+      if (liveSocketRef.current?.readyState === WebSocket.OPEN) return;
+      setLiveStatus(reconnectAttemptRef.current > 0 ? "reconnecting" : "disconnected");
+      const socket = new WebSocket(wsUrl);
+      liveSocketRef.current = socket;
+
+      socket.onopen = () => {
+        if (disposed) return;
+        reconnectAttemptRef.current = 0;
+        setLiveStatus("connected");
+        setLostConnectionAt(null);
+      };
+
+      socket.onclose = () => {
+        if (disposed) return;
+        setLiveStatus("reconnecting");
+        setLostConnectionAt((previous) => previous ?? Date.now());
+        const delays = [1000, 2000, 5000, 10000];
+        const delay = delays[Math.min(reconnectAttemptRef.current, delays.length - 1)];
+        const jitter = Math.floor(Math.random() * 500);
+        reconnectAttemptRef.current += 1;
+        reconnectTimerRef.current = setTimeout(connect, delay + jitter);
+      };
+
+      socket.onerror = () => socket.close();
+    };
+
+    connect();
+    liveReconnectRef.current = connect;
+
+    const handleOffline = () => {
+      setLiveStatus("disconnected");
+      setLostConnectionAt(Date.now());
+    };
+    const handleOnline = () => {
+      reconnectAttemptRef.current = 0;
+      connect();
+    };
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+      liveReconnectRef.current = null;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (liveSocketRef.current) {
+        liveSocketRef.current.onclose = null;
+        liveSocketRef.current.close();
+      }
+    };
+  }, []);
+
+  const [staleWarningVisible, setStaleWarningVisible] = useState(false);
+  useEffect(() => {
+    if (!lostConnectionAt) {
+      setStaleWarningVisible(false);
+      return;
+    }
+    const update = () => setStaleWarningVisible(Date.now() - lostConnectionAt > 30_000);
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [lostConnectionAt]);
+
+  const reconnectNow = () => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    if (liveSocketRef.current) {
+      liveSocketRef.current.onclose = null;
+      liveSocketRef.current.close();
+      liveSocketRef.current = null;
+    }
+    reconnectAttemptRef.current = 0;
+    setLiveStatus("reconnecting");
+    setLostConnectionAt(Date.now());
+    liveReconnectRef.current?.();
+  };
 
   // Global keyboard shortcut: Cmd+K (macOS) / Ctrl+K (Windows/Linux) (#308)
   useEffect(() => {
@@ -441,6 +538,14 @@ export function DashboardShell() {
         {/* Top Header */}
         <header className="h-16 px-6 border-b border-black/10 bg-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={liveStatus !== "connected" ? reconnectNow : undefined}
+              title={liveStatus === "connected" ? "Live data connection" : "Reconnect live data"}
+              className="flex h-8 items-center gap-1.5 rounded-md border border-black/10 bg-white px-2.5 text-xs font-semibold"
+            >
+              {liveStatus === "connected" ? "🟢 Live" : liveStatus === "reconnecting" ? "🟡 Reconnecting..." : "🔴 Offline"}
+            </button>
             <div className="relative">
               <button
                 type="button"
@@ -563,6 +668,19 @@ export function DashboardShell() {
             </div>
           </div>
         </header>
+
+        {staleWarningVisible && (
+          <div role="alert" className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+            <span className="font-medium">Live sync interrupted. Reconnecting...</span>
+            <button
+              type="button"
+              onClick={reconnectNow}
+              className="shrink-0 rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold"
+            >
+              Reconnect Now
+            </button>
+          </div>
+        )}
 
         {walletNetworkWarning && (
           <div role="alert" className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">

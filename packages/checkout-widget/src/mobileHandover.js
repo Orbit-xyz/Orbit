@@ -12,6 +12,14 @@ export function mobileHandoverUrl(pageUrl, channelId) {
   return url.toString();
 }
 
+export function sep7TransactionUri({ xdr, networkPassphrase, msg }) {
+  if (!xdr) throw new Error('An allowance transaction XDR is required.');
+  const params = new URLSearchParams({ xdr });
+  if (networkPassphrase) params.set('network', networkPassphrase);
+  if (msg) params.set('msg', msg);
+  return `web+stellar:tx?${params.toString()}`;
+}
+
 export async function handoverQRCode(url) {
   return QRCode.toDataURL(url, {
     width: 400, margin: 2, errorCorrectionLevel: 'Q',
@@ -35,7 +43,14 @@ export async function openHandover({ apiUrl, planId, pageUrl, fetchImpl = fetch 
   if (!session || !CHANNEL_PATTERN.test(session.id) || session.planId !== planId ||
       !Number.isFinite(session.expiresAt)) throw new Error('Malformed handover session');
   const url = mobileHandoverUrl(pageUrl, session.id);
-  return { ...session, url, qrDataUrl: await handoverQRCode(url) };
+  const qrUrl = session.allowanceTransactionXdr
+    ? sep7TransactionUri({
+        xdr: session.allowanceTransactionXdr,
+        networkPassphrase: session.networkPassphrase,
+        msg: 'Authorize this Orbit subscription allowance',
+      })
+    : url;
+  return { ...session, url, qrDataUrl: await handoverQRCode(qrUrl), qrUri: qrUrl };
 }
 
 export async function readHandover({ apiUrl, channelId, fetchImpl = fetch }) {

@@ -143,6 +143,7 @@ customClasses = {},
   requireConsent = false,
   locale = "", // #264: explicit locale override, e.g. "es"
   hardwareWallet = false, // #267: set true for extended sign timeout + guidance UI
+  strictDomainEnforcement = false,
   referralCode = "", // #351: customizable promotional referral tracking code
 }) {
   const isMobile = useMemo(() => isMobileBrowser(), []);
@@ -222,6 +223,11 @@ customClasses = {},
     : null;
 
   const [plan, setPlan] = useState(planData || null);
+  const [originVerification, setOriginVerification] = useState({
+    checking: true,
+    verified: true,
+    strict: strictDomainEnforcement,
+  });
   const [loading, setLoading] = useState(!planData);
   const [error, setError] = useState("");
   const [address, setAddress] = useState("");
@@ -687,6 +693,58 @@ customClasses = {},
       .finally(() => setLoading(false));
     return () => controller.abort();
   }, [apiUrl, planData, planId]);
+
+  useEffect(() => {
+    if (!plan || typeof window === "undefined") return undefined;
+    const merchantAddress =
+      plan.merchants?.wallet_address ||
+      plan.merchant_address ||
+      plan.merchantAddress ||
+      "";
+    if (!merchantAddress) {
+      setOriginVerification({ checking: false, verified: true, strict: strictDomainEnforcement });
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setOriginVerification({ checking: true, verified: true, strict: strictDomainEnforcement });
+    fetch(`${apiUrl}/merchants/verify-origin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        merchantAddress,
+        planId: plan.id || planId,
+        origin: window.location.origin,
+      }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Origin verification unavailable");
+        return response.json();
+      })
+      .then((result) => {
+        const domains = result.authorizedDomains || result.allowedDomains || result.allowed_domains || [];
+        const normalizedCurrent = window.location.hostname.toLowerCase().replace(/\.$/, "");
+        const normalizedDomains = domains.map((domain) =>
+          String(domain).toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "").replace(/\.$/, "")
+        );
+        const apiVerified = result.verified === true;
+        const matchedDomain = normalizedDomains.includes(normalizedCurrent);
+        const strict = result.strictDomainEnforcement === true || result.strict_domain_enforcement === true || strictDomainEnforcement;
+        setOriginVerification({
+          checking: false,
+          verified: apiVerified || matchedDomain || normalizedDomains.length === 0,
+          strict,
+        });
+      })
+      .catch(() => setOriginVerification({
+        checking: false,
+        verified: !strictDomainEnforcement,
+        strict: strictDomainEnforcement,
+      }));
+
+    return () => controller.abort();
+  }, [apiUrl, plan, planId, strictDomainEnforcement]);
 
   useEffect(() => {
     if (plan) dispatch("orbit:ready", { planId: plan.id || planId });
@@ -1195,6 +1253,10 @@ customClasses = {},
   }, [isSwap, selectedPayWith, slippagePct, plan, planCurrency, horizonUrl]);
 
   const startHandover = async () => {
+    if (originVerification.strict && !originVerification.verified) {
+      setError("Transaction signing is blocked because this site is not on the merchant's verified domain list.");
+      return;
+    }
     if (!consentSatisfied) {
       setError(
         "Please agree to the Terms of Service and billing authorization before connecting a wallet.",
@@ -1256,6 +1318,10 @@ customClasses = {},
   };
 
   const subscribe = async () => {
+    if (originVerification.strict && !originVerification.verified) {
+      setError("Transaction signing is blocked because this site is not on the merchant's verified domain list.");
+      return;
+    }
     if (!isOnline) {
       setError('You are currently offline. Please reconnect to the internet to complete your subscription.');
       return;
@@ -1645,6 +1711,27 @@ let hashes;
         @keyframes orbit-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
         @media (prefers-reduced-motion: reduce) { .orbit-checkout-root { animation: none; } }
       `}</style>
+
+      {!originVerification.checking && !originVerification.verified && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          style={{
+            marginBottom: 16,
+            borderRadius: RADIUS.md,
+            border: "1px solid #dc2626",
+            background: "#fff1f2",
+            color: "#991b1b",
+            padding: "12px 14px",
+            fontSize: 13,
+            fontWeight: 700,
+            lineHeight: 1.4,
+          }}
+        >
+          ⚠️ Warning: This site is not on the verified domain list for this merchant.
+          {originVerification.strict && " Transaction signing is disabled by Strict Domain Enforcement."}
+        </div>
+      )}
 
       <div className={customClasses.header}>
         {logoUrl && <img src={logoUrl} alt={`${plan.merchants?.name || "Merchant"} logo`} style={{ width: "auto", maxWidth: 160, height: 48, objectFit: "contain", marginBottom: 12 }} />}
@@ -2544,7 +2631,7 @@ let hashes;
               >
                 {handoverBusy
                   ? "Creating secure QR session…"
-                  : "Scan with Mobile Wallet"}
+                  : "📱 Mobile Wallet (Scan QR)"}
               </button>
             )}
           </div>
@@ -2606,7 +2693,7 @@ let hashes;
             >
               {handoverBusy
                 ? "Creating secure QR session…"
-                : "📱 Scan with Mobile Wallet"}
+                : "📱 Mobile Wallet (Scan QR)"}
               <small style={{ display: "block", color: "var(--orbit-muted)" }}>
                 Continue in LOBSTR or Albedo on your phone
               </small>

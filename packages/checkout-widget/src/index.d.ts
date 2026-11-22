@@ -51,6 +51,8 @@ export interface OrbitCheckoutProps {
   termsUrl?: string;
   privacyUrl?: string;
   requireConsent?: boolean;
+  hardwareWallet?: boolean;
+  strictDomainEnforcement?: boolean;
 }
 
 export interface DelegatedSessionKey {

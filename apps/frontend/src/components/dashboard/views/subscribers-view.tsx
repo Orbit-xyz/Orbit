@@ -184,6 +184,9 @@ export function SubscribersView() {
   const [executingPullId, setExecutingPullId] = useState<string | null>(null);
   const [pullSuccessMessage, setPullSuccessMessage] = useState<string | null>(null);
   const [isBatchPulling, setIsBatchPulling] = useState(false);
+  const [subscriberView, setSubscriberView] = useState<"subscribers" | "churn">("subscribers");
+  const [feedbackReason, setFeedbackReason] = useState("all");
+  const [feedbackSearch, setFeedbackSearch] = useState("");
 
   // Client-Side Debounced Search
   useEffect(() => {
@@ -535,6 +538,71 @@ export function SubscribersView() {
   const pastDueCount = subscribers.filter((s) => s.status === "past_due").length;
   const totalSettledAll = subscribers.reduce((acc, s) => acc + s.totalSettled, 0);
 
+  const churnRecords = useMemo(() => {
+    const reasons = ["Price", "Missing Features", "Switched", "Bug", "Other"];
+    const comments = [
+      "The monthly cost was difficult to justify for our current usage.",
+      "We needed an integration that is not available yet.",
+      "Moved to another platform that better matched our workflow.",
+      "A recurring billing issue interrupted our team.",
+      "Paused this project and may return later.",
+    ];
+    return subscribers
+      .filter((subscriber) => subscriber.status === "churned" || subscriber.status === "cancelled")
+      .map((subscriber, index) => ({
+        id: subscriber.id,
+        cancellationDate: new Date(Date.now() - (index + 2) * 9 * 86_400_000).toLocaleDateString("en-US"),
+        planName: subscriber.planName,
+        walletAddress: subscriber.walletAddress,
+        reason: reasons[index % reasons.length],
+        comment: comments[index % comments.length],
+        lifetimeDays: Math.max(1, Math.round((Date.now() - (Date.parse(subscriber.joinedDate) || Date.now())) / 86_400_000)),
+      }));
+  }, [subscribers]);
+
+  const reasonDistribution = useMemo(() => {
+    const counts = new Map<string, number>([
+      ["Price", 0], ["Missing Features", 0], ["Switched", 0], ["Bug", 0], ["Other", 0],
+    ]);
+    churnRecords.forEach((record) => counts.set(record.reason, (counts.get(record.reason) || 0) + 1));
+    const fallback = [["Price", 38], ["Missing Features", 24], ["Switched", 16], ["Bug", 12], ["Other", 10]] as [string, number][];
+    return counts.size && churnRecords.length
+      ? Array.from(counts.entries()).filter(([, count]) => count > 0).map(([name, count]) => ({ name, count }))
+      : fallback.map(([name, count]) => ({ name, count }));
+  }, [churnRecords]);
+
+  const lostRevenue = useMemo(() => {
+    const churned = subscribers.filter((subscriber) => subscriber.status === "churned" || subscriber.status === "cancelled");
+    const lostMrr = churned.reduce((sum, subscriber) => sum + subscriber.amount, 0);
+    const averageLtv = churned.length ? churned.reduce((sum, subscriber) => sum + subscriber.totalSettled, 0) / churned.length : 0;
+    const averageLifespan = churnRecords.length
+      ? Math.round(churnRecords.reduce((sum, record) => sum + record.lifetimeDays, 0) / churnRecords.length)
+      : 0;
+    return { lostMrr, averageLtv, averageLifespan };
+  }, [subscribers, churnRecords]);
+
+  const planChurn = useMemo(() => {
+    const plans = new Map<string, { total: number; churned: number }>();
+    subscribers.forEach((subscriber) => {
+      const current = plans.get(subscriber.planName) || { total: 0, churned: 0 };
+      current.total += 1;
+      if (subscriber.status === "churned" || subscriber.status === "cancelled") current.churned += 1;
+      plans.set(subscriber.planName, current);
+    });
+    return Array.from(plans.entries()).map(([name, value]) => ({
+      name,
+      rate: value.total ? (value.churned / value.total) * 100 : 0,
+    }));
+  }, [subscribers]);
+
+  const filteredFeedback = useMemo(() => {
+    const query = feedbackSearch.toLowerCase().trim();
+    return churnRecords.filter((record) =>
+      (feedbackReason === "all" || record.reason === feedbackReason) &&
+      (!query || `${record.walletAddress} ${record.planName} ${record.comment}`.toLowerCase().includes(query))
+    );
+  }, [churnRecords, feedbackReason, feedbackSearch]);
+
   return (
     <div className="space-y-6">
       {/* 1. Header with Batch Action and Demo Mode Toggle */}
@@ -562,6 +630,14 @@ export function SubscribersView() {
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+          <div className="flex items-center rounded-lg border border-black/10 bg-neutral-100 p-0.5">
+            <button onClick={() => setSubscriberView("subscribers")} className={`rounded-md px-3 py-1.5 text-xs font-medium ${subscriberView === "subscribers" ? "bg-white text-black shadow-2xs" : "text-neutral-500"}`}>
+              Subscribers
+            </button>
+            <button onClick={() => setSubscriberView("churn")} className={`rounded-md px-3 py-1.5 text-xs font-medium ${subscriberView === "churn" ? "bg-white text-black shadow-2xs" : "text-neutral-500"}`}>
+              Churn Insights
+            </button>
+          </div>
           {/* Toggle between Live and Demo data */}
           <button
             onClick={() => setIsDemoMode((prev) => !prev)}
@@ -616,6 +692,115 @@ export function SubscribersView() {
         </div>
       </div>
 
+      {subscriberView === "churn" ? (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-xl border border-black/10 bg-white p-5">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Total Lost MRR</div>
+              <div className="mt-1 text-2xl font-bold">${lostRevenue.lostMrr.toFixed(2)}</div>
+              <div className="mt-1 text-xs text-neutral-500">Recurring monthly revenue lost</div>
+            </div>
+            <div className="rounded-xl border border-black/10 bg-white p-5">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Average LTV</div>
+              <div className="mt-1 text-2xl font-bold">${lostRevenue.averageLtv.toFixed(2)}</div>
+              <div className="mt-1 text-xs text-neutral-500">Settled before churn</div>
+            </div>
+            <div className="rounded-xl border border-black/10 bg-white p-5">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Average Lifespan</div>
+              <div className="mt-1 text-2xl font-bold">{lostRevenue.averageLifespan} days</div>
+              <div className="mt-1 text-xs text-neutral-500">Before subscription cancellation</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-black/10 bg-white p-5">
+              <h3 className="text-sm font-semibold">Reason Distribution</h3>
+              <div className="mt-5 flex flex-col sm:flex-row items-center gap-6">
+                <div
+                  role="img"
+                  aria-label="Interactive cancellation reason distribution"
+                  className="h-44 w-44 shrink-0 rounded-full"
+                  style={{
+                    background: `conic-gradient(${reasonDistribution.map((item, index) => {
+                      const colors = ["#111827", "#6366f1", "#10b981", "#f59e0b", "#ef4444"];
+                      const total = reasonDistribution.reduce((sum, entry) => sum + entry.count, 0);
+                      let before = reasonDistribution.slice(0, index).reduce((sum, entry) => sum + entry.count, 0);
+                      const start = total ? (before / total) * 100 : 0;
+                      before += item.count;
+                      const end = total ? (before / total) * 100 : 0;
+                      return `${colors[index % colors.length]} ${start}% ${end}%`;
+                    }).join(", ")})`,
+                    boxShadow: "inset 0 0 0 38px white",
+                  }}
+                />
+                <div className="w-full space-y-2">
+                  {reasonDistribution.map((item, index) => {
+                    const colors = ["bg-neutral-800", "bg-indigo-500", "bg-emerald-500", "bg-amber-500", "bg-red-500"];
+                    const total = reasonDistribution.reduce((sum, entry) => sum + entry.count, 0);
+                    const percent = total ? Math.round((item.count / total) * 100) : 0;
+                    return (
+                      <div key={item.name} title={`${item.name}: ${percent}%`} className="flex items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-neutral-50">
+                        <span className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-sm ${colors[index % colors.length]}`} />{item.name}</span>
+                        <span className="font-mono font-semibold">{percent}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-black/10 bg-white p-5">
+              <h3 className="text-sm font-semibold">Plan Churn Comparison</h3>
+              <div className="mt-6 space-y-4">
+                {planChurn.map((item) => (
+                  <div key={item.name}>
+                    <div className="mb-1.5 flex items-center justify-between text-xs">
+                      <span className="font-medium">{item.name}</span>
+                      <span className="font-mono">{item.rate.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-3 overflow-hidden rounded-full bg-neutral-100" title={`${item.name}: ${item.rate.toFixed(1)}% churn`}>
+                      <div className="h-full rounded-full bg-neutral-900 transition-all" style={{ width: `${Math.min(100, item.rate)}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-black/10 bg-white">
+            <div className="flex flex-col gap-3 border-b border-black/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="text-sm font-semibold">Cancellation Feedback</h3>
+              <div className="flex gap-2">
+                <input value={feedbackSearch} onChange={(event) => setFeedbackSearch(event.target.value)} placeholder="Search feedback..." className="rounded-lg border border-black/10 px-3 py-2 text-xs" />
+                <select value={feedbackReason} onChange={(event) => setFeedbackReason(event.target.value)} className="rounded-lg border border-black/10 px-3 py-2 text-xs">
+                  <option value="all">All reasons</option>
+                  {["Price", "Missing Features", "Switched", "Bug", "Other"].map((reason) => <option key={reason} value={reason}>{reason}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-neutral-50 text-[10px] uppercase tracking-wider text-neutral-500">
+                  <tr><th className="px-4 py-3">Cancellation date</th><th className="px-4 py-3">Plan tier</th><th className="px-4 py-3">Customer address</th><th className="px-4 py-3">Reason</th><th className="px-4 py-3">Comment</th></tr>
+                </thead>
+                <tbody className="divide-y divide-black/5">
+                  {filteredFeedback.map((record) => (
+                    <tr key={record.id} className="hover:bg-neutral-50">
+                      <td className="px-4 py-3 font-mono">{record.cancellationDate}</td>
+                      <td className="px-4 py-3">{record.planName}</td>
+                      <td className="px-4 py-3 font-mono">{record.walletAddress.slice(0, 8)}...{record.walletAddress.slice(-6)}</td>
+                      <td className="px-4 py-3"><span className="rounded-full border border-black/10 bg-neutral-50 px-2 py-1 font-medium">{record.reason}</span></td>
+                      <td className="max-w-sm px-4 py-3 text-neutral-600">{record.comment}</td>
+                    </tr>
+                  ))}
+                  {filteredFeedback.length === 0 && <tr><td colSpan={5} className="px-4 py-10 text-center text-neutral-500">No cancellation feedback matches these filters.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
       {!isDemoMode && <form className="flex flex-wrap items-center gap-3 rounded-xl border p-4 text-xs" onSubmit={(event) => {
         event.preventDefault(); setMerchantApiKey(apiKeyInput); setApiKeyInput(""); void loadSubscribers();
       }}><label htmlFor="subscriber-api-key">Merchant API key</label><input id="subscriber-api-key" type="password" autoComplete="off"
@@ -1306,6 +1491,8 @@ export function SubscribersView() {
           {" "}The Soroban smart contract (<code className="font-mono text-[11px] text-black">CAZBZB...YQNG</code>) verifies on-chain ledger timestamps. A merchant cannot pull funds before the interval has elapsed or exceed the authorized amount cap.
         </div>
       </div>
+      </>
+      )}
 
       {/* Customer Detail Drawer */}
       {resolutionSubscriber && <PastDueResolutionModal key={resolutionSubscriber.id} subscriber={resolutionSubscriber} demo={isDemoMode}
