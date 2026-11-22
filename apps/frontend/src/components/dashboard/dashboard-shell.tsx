@@ -32,6 +32,7 @@ import {
   Mail,
   FileSpreadsheet,
   Droplets,
+  Palette,
 } from "lucide-react";
 import { useDashboardTheme, type ThemePreference } from "@/lib/dashboard-theme";
 import { useFiatRates, type FiatCurrency } from "@/lib/fiat-rates";
@@ -52,6 +53,7 @@ import { RetentionView } from "./views/retention-view";
 import { NotificationTemplatesView } from "./views/notification-templates-view";
 import { TeamView } from "./views/team-view";
 import { TaxComplianceView } from "./views/tax-compliance-view";
+import { BrandSettingsView } from "./views/brand-settings-view";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
 import { VaultModal } from "./modals/vault-modal";
 import { DeployVaultModal } from "./modals/deploy-vault-modal";
@@ -361,6 +363,12 @@ export function DashboardShell() {
       label: t("nav.developers"),
       icon: Code2,
       badge: t("badges.api"),
+    },
+    {
+      id: "brand" as DashboardTab,
+      label: "Brand & checkout",
+      icon: Palette,
+      badge: null,
     },
   ];
 
@@ -738,6 +746,7 @@ export function DashboardShell() {
           {activeTab === "tax" && <TaxComplianceView />}
 
           {activeTab === "developers" && <DevelopersView />}
+          {activeTab === "brand" && <BrandSettingsView />}
         </main>
       </div>
 
