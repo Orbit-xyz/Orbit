@@ -56,6 +56,10 @@ VITE_STELLAR_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
 | `termsUrl` | — | Link target for "Terms of Service" inside the consent checkbox. Plain text if omitted. |
 | `privacyUrl` | — | Link target for "Privacy Policy" inside the consent checkbox. Omitted from the sentence entirely if not set. |
 | `requireConsent` | `false` | When `true`, renders a mandatory legal disclosure checkbox and disables every wallet-connection and subscribe button until it is checked. |
+| `sandbox` | `false` | #355: run a simulated checkout with an in-memory wallet and no network access. Shows a developer toolbar to choose the outcome (instant success, insufficient balance, user rejected, network timeout) and the confirmation delay (none, 500ms, 2s). See [Sandbox mode](#sandbox-mode). |
+| `onSuccess` | - | Called with `{ vaultId, planId, txHash, sandbox }` (plus `subscriptionId` and metadata for live checkouts). |
+| `onError` | - | #355: called with `{ code, message }` when a subscription fails. |
+| `onClose` | - | #355: called when the customer closes or cancels checkout. |
 
 ```jsx
 <OrbitCheckout
@@ -236,3 +240,14 @@ So there is currently no Stellar-capable Allbridge surface that can legally be e
 **Handshake resume:** opening the modal immediately starts polling the connected address's Horizon account (`fetchPayWithBalances`, the same helper the "Pay with" selector uses) every 6 seconds for up to 30 minutes, the same start/poll/stop shape `mobileHandover.js` uses for the QR handover session. The watch keeps running if the modal is closed ("Keep watching in the background"). Once the USDC balance rises above what it was before bridging, the widget stops watching, refreshes the "Pay with" balances, dispatches `orbit:bridge_funds_arrived`, and surfaces a "ready to continue" banner - the checkout flow resumes on its own up to that point. **The final signature is still a manual click**: this widget never auto-fires a wallet signing prompt without a fresh user gesture (the same rule the consent and coupon features above rely on), so the customer still clicks Subscribe & Approve themselves once their bridged funds have landed.
 
 Run `npm test` (unit tests) and `npm run build` for this package. Handover approval requires a real wallet transaction; offline/demo states cannot mark a session confirmed.
+
+## Sandbox mode
+
+`<OrbitCheckout sandbox />` runs the full checkout UI without a Freighter extension, a funded testnet account, or any network call. It is meant for local development and automated Cypress or Playwright tests.
+
+- The wallet is an in-memory stand-in that mirrors Freighter's `isConnected`, `getAddress` and `signTransaction` return shapes, and also exposes `getPublicKey`.
+- Outcomes are simulated. `signTransaction` never produces a valid Stellar envelope, so nothing signed in sandbox mode can be submitted.
+- Successful payloads carry a simulated `vaultId` and a 64-character mock `txHash`, with `sandbox: true`.
+- The sandbox path makes no `fetch`, Horizon or Soroban RPC calls, and the balance and USDC readiness checks are skipped.
+
+Use `sandbox={import.meta.env.DEV}` to keep it out of production builds.

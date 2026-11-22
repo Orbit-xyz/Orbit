@@ -91,7 +91,6 @@ export interface PayrollViewProps {
   onUploadOpened?: () => void;
 }
 
-export function PayrollView({ autoOpenUpload, onUploadOpened }: PayrollViewProps = {}) {
 export interface MultiSigSigner {
   address: string;
   name: string;
@@ -118,7 +117,7 @@ export interface MultiSigProposal {
   settledAt?: string;
 }
 
-export function PayrollView() {
+export function PayrollView({ autoOpenUpload, onUploadOpened }: PayrollViewProps = {}) {
   const t = useTranslations("Tables");
   const { can } = useTeam();
   const canRunPayroll = can("runPayroll");

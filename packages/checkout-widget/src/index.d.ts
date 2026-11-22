@@ -47,6 +47,10 @@ export interface OrbitCheckoutProps {
   customFields?: OrbitCustomField[];
   captureEmail?: boolean;
   onSuccess?: (event: OrbitSubscribedEvent & { email?: string }) => void;
+  onError?: (error: { code: string; message: string }) => void;
+  onClose?: () => void;
+  /** #355: simulated wallet and settlement with a developer toolbar. Never touches the network. */
+  sandbox?: boolean;
   walletConnectProjectId?: string;
   termsUrl?: string;
   privacyUrl?: string;
