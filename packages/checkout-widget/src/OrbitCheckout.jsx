@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { resolveCheckoutTheme } from "./checkoutTheme";
+import { classifyLatency, probeRpcWithFallback } from "./rpcLatency";
+import { calculateSetupFeeBreakdown, initialAuthAmountWithSetupFee } from "./setupFee";
 import { checkUsdcReadiness, usdcReadinessMessage } from "./usdcReadiness";
 import { formatPromoTerms, promoAuthorization, validatePromoCode } from "./promo";
 import { CHECKOUT_EVENTS, createCheckoutMessageBridge } from "./checkoutMessageBridge";
@@ -128,6 +130,8 @@ export default function OrbitCheckout({
   tokenContractId = import.meta.env.VITE_USDC_CONTRACT_ID,
   rpcUrl = import.meta.env.VITE_SOROBAN_RPC_URL ||
     "https://soroban-testnet.stellar.org",
+  backupRpcUrl = import.meta.env.VITE_SOROBAN_BACKUP_RPC_URL || "",
+  setupFee = 0,
   networkPassphrase = import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE ||
     Networks.TESTNET,
   theme = "auto",
@@ -152,6 +156,37 @@ customClasses = {},
   referralCode = "", // #351: customizable promotional referral tracking code
 }) {
   const isMobile = useMemo(() => isMobileBrowser(), []);
+
+  // #369 — asynchronous Soroban RPC latency monitor & automated fallback
+  const [activeRpcUrl, setActiveRpcUrl] = useState(rpcUrl);
+  const [rpcLatencyState, setRpcLatencyState] = useState(() => ({
+    latencyMs: null,
+    status: classifyLatency(null),
+    usedFallback: false,
+    failedOverFrom: null,
+    error: null,
+  }));
+  const [latencyTooltipOpen, setLatencyTooltipOpen] = useState(false);
+
+  useEffect(() => {
+    setActiveRpcUrl(rpcUrl);
+    if (sandbox) return;
+    let cancelled = false;
+    void probeRpcWithFallback(rpcUrl, backupRpcUrl).then((res) => {
+      if (cancelled) return;
+      setActiveRpcUrl(res.activeRpcUrl);
+      setRpcLatencyState({
+        latencyMs: res.latencyMs,
+        status: res.status,
+        usedFallback: res.usedFallback,
+        failedOverFrom: res.failedOverFrom,
+        error: res.error,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rpcUrl, backupRpcUrl, sandbox]);
 
   // #355 — sandbox mode: simulated wallet, developer toolbar, no network access
   const [sandboxSettings, setSandboxSettings] = useState(DEFAULT_SANDBOX_SETTINGS);
@@ -1463,8 +1498,12 @@ customClasses = {},
         );
       }
 
-      // #299: with a promo, the vault and allowance follow the discounted schedule
-      const authTerms = promoAuthorization(plan, appliedCoupon);
+      // #299 + #368: with a promo or setup fee, initial authorization includes setup fee + first cycle
+      const baseAuthTerms = promoAuthorization(plan, appliedCoupon);
+      const authTerms = {
+        ...baseAuthTerms,
+        amount: initialAuthAmountWithSetupFee(baseAuthTerms.amount, setupFee),
+      };
       setConfirming(true);
       setConfirmingSeconds(60);
 
@@ -1547,7 +1586,7 @@ let hashes;
           billingCycles: authTerms.billingCycles,
           orbitContractId,
           tokenContractId,
-          rpcUrl,
+          rpcUrl: activeRpcUrl,
           networkPassphrase,
           baseFee: feeBreakdown.feePerOpStroops,
         });
@@ -1561,7 +1600,7 @@ let hashes;
           billingCycles: authTerms.billingCycles,
           orbitContractId,
           tokenContractId,
-          rpcUrl,
+          rpcUrl: activeRpcUrl,
           networkPassphrase,
           baseFee: feeBreakdown.feePerOpStroops,
           preflight,
@@ -1844,6 +1883,41 @@ let hashes;
         <p style={styles.price}>${planAmountUsdc} USDC</p>
       )}
       <p>Billed every {planIntervalDays} days</p>
+      {(() => {
+        const feeBreakdownSummary = calculateSetupFeeBreakdown({
+          recurringAmountUsdc: promoTerms ? Number(promoTerms.discounted) : Number(planAmountUsdc),
+          setupFee,
+          intervalSeconds: plan?.interval_seconds,
+        });
+        if (!feeBreakdownSummary.hasSetupFee) return null;
+        return (
+          <div
+            data-testid="orbit-setup-fee-breakdown"
+            style={{
+              margin: "12px 0",
+              padding: "12px 14px",
+              borderRadius: "var(--orbit-radius)",
+              border: "1px solid var(--orbit-border)",
+              background: "rgba(99, 102, 241, 0.04)",
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            <div>{feeBreakdownSummary.lines.setupFee}</div>
+            <div style={{ color: "var(--orbit-muted)" }}>{feeBreakdownSummary.lines.recurring}</div>
+            <div
+              style={{
+                marginTop: 6,
+                paddingTop: 6,
+                borderTop: "1px solid var(--orbit-border)",
+                fontWeight: 700,
+              }}
+            >
+              {feeBreakdownSummary.lines.totalDueToday}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Coupon code (#222) */}
       {!receipt && (
@@ -3045,6 +3119,84 @@ let hashes;
             </button>
           )}
         </div>
+      )}
+
+      {/* Network status & RPC latency footer pill (#369) */}
+      {!sandbox && (
+        <footer
+          style={{
+            marginTop: 18,
+            paddingTop: 10,
+            borderTop: "1px solid var(--orbit-border)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 11,
+            color: "var(--orbit-muted)",
+            position: "relative",
+          }}
+        >
+          <span>
+            {rpcLatencyState.usedFallback ? "Soroban RPC (backup)" : "Soroban RPC"}
+          </span>
+          <button
+            type="button"
+            data-testid="orbit-rpc-latency-pill"
+            aria-label={`Network latency: ${rpcLatencyState.status.label}`}
+            title={rpcLatencyState.status.tooltip}
+            onClick={() => setLatencyTooltipOpen((open) => !open)}
+            onMouseEnter={() => {
+              if (rpcLatencyState.status.elevated) setLatencyTooltipOpen(true);
+            }}
+            onMouseLeave={() => setLatencyTooltipOpen(false)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "2px 8px",
+              borderRadius: 999,
+              border: "1px solid var(--orbit-border)",
+              background: "transparent",
+              color: "var(--orbit-text)",
+              fontSize: 11,
+              fontFamily: "monospace",
+              cursor: "pointer",
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: rpcLatencyState.status.dot,
+                display: "inline-block",
+              }}
+            />
+            <span>{rpcLatencyState.status.label}</span>
+          </button>
+          {latencyTooltipOpen && rpcLatencyState.status.elevated && (
+            <div
+              role="tooltip"
+              style={{
+                position: "absolute",
+                right: 0,
+                bottom: 30,
+                maxWidth: 260,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "#111827",
+                color: "#f9fafb",
+                fontSize: 11,
+                lineHeight: 1.4,
+                boxShadow: "0 6px 20px rgba(0,0,0,0.2)",
+                zIndex: 5,
+              }}
+            >
+              {rpcLatencyState.status.tooltip}
+            </div>
+          )}
+        </footer>
       )}
     </section>
   );

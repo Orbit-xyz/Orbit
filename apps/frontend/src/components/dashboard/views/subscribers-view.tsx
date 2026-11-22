@@ -46,6 +46,7 @@ import {
 } from "@/lib/subscriber-health";
 import { ChurnRiskCard, HealthBadge } from "../subscriber-health-ui";
 import { CustomerDetailDrawer } from "../drawers/customer-detail-drawer";
+import { RefillReminderDrawer } from "../drawers/refill-reminder-drawer";
 import { PastDueResolutionModal } from "../modals/past-due-resolution-modal";
 import { retrySignedPull } from "@/lib/billing-resolution";
 
@@ -203,6 +204,7 @@ export function SubscribersView() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showAtRiskOnly, setShowAtRiskOnly] = useState(false);
   const [remindingId, setRemindingId] = useState<string | null>(null);
+  const [reminderSubscriber, setReminderSubscriber] = useState<SubscriberRecord | null>(null);
   const [reminderNotice, setReminderNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const tHealth = useTranslations("SubscriberHealth");
 
@@ -432,7 +434,7 @@ export function SubscribersView() {
     return null;
   };
 
-  const handleSendReminder = async (sub: SubscriberRecord) => {
+  const handleSendReminder = async (sub: SubscriberRecord, _customNote = "") => {
     setRemindingId(sub.id);
     setReminderNotice(null);
     try {
@@ -445,6 +447,7 @@ export function SubscribersView() {
       }
       setSubscribers((prev) => prev.map((s) => (s.id === sub.id ? { ...s, lastBalanceReminderAt: sentAt } : s)));
       setReminderNotice({ tone: "success", text: tHealth("reminder.sent", { recipient }) });
+      setReminderSubscriber(null);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       setReminderNotice({ tone: "error", text: tHealth("reminder.failed", { error: message }) });
@@ -1358,7 +1361,7 @@ export function SubscribersView() {
                           {showReminder && (
                             <button
                               type="button"
-                              onClick={() => handleSendReminder(sub)}
+                              onClick={() => setReminderSubscriber(sub)}
                               disabled={isReminding || reminderBlocked !== null}
                               className="button button-secondary h-7 px-2 text-xs inline-flex items-center gap-1 text-amber-800 disabled:opacity-50 disabled:cursor-not-allowed"
                               title={reminderBlocked ?? tHealth("reminder.title")}
@@ -1506,6 +1509,14 @@ export function SubscribersView() {
         onExecutePull={handleExecutePull}
         onSubscriberUpdated={handleSubscriberUpdated}
         isExecutingPull={executingPullId === selectedSubscriber?.id}
+      />
+      <RefillReminderDrawer
+        isOpen={reminderSubscriber !== null}
+        subscriber={reminderSubscriber}
+        isSending={remindingId !== null && remindingId === reminderSubscriber?.id}
+        blockedReason={reminderSubscriber ? reminderBlockedReason(reminderSubscriber) : null}
+        onClose={() => setReminderSubscriber(null)}
+        onDispatch={handleSendReminder}
       />
     </div>
   );
