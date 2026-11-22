@@ -71,6 +71,9 @@ pub enum OrbitContractError {
     MilestoneNotDisputed = 316,
     /// #225: dispute splits do not add up to the remaining balance.
     InvalidDisputeSplit = 317,
+    /// #353: the vault is frozen, either by its subscriber (`pause_vault`) or by
+    /// the merchant (`batch_pause_vaults`). Pulls revert with this code.
+    VaultPaused = 318,
 }
 
 /// Sentinel `pull_sequence` for a vault that has never settled a pull.
@@ -670,6 +673,10 @@ pub enum FeatureKey {
     /// #223: escrow hold ids created for a vault, so a post-timelock recovery
     /// can refund every still-pending hold to the subscriber.
     VaultEscrowIds(Address, Address),
+    /// #353: merchant-initiated freeze flag for a (user, merchant) vault, set by
+    /// `batch_pause_vaults`. Separate from the subscriber's `is_paused` so that
+    /// neither party can lift the other's freeze.
+    MerchantFreeze(Address, Address),
 }
 
 // ----------------------------------------------------------------------------
@@ -1226,6 +1233,81 @@ fn assert_not_paused(env: &Env) {
     }
 }
 
+/// #353: whether the merchant has frozen this (user, merchant) vault.
+fn is_merchant_frozen(env: &Env, user: &Address, merchant: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&FeatureKey::MerchantFreeze(user.clone(), merchant.clone()))
+        .unwrap_or(false)
+}
+
+/// #353: reverts with `VaultPaused` if either the subscriber or the merchant has
+/// frozen the vault. Used by every single-vault pull path.
+fn assert_vault_not_paused(env: &Env, vault: &VaultData, user: &Address, merchant: &Address) {
+    if vault.is_paused || is_merchant_frozen(env, user, merchant) {
+        panic_with_error!(env, OrbitContractError::VaultPaused);
+    }
+}
+
+/// #353: sets or clears the merchant freeze on every listed subscriber vault in
+/// one pass. Atomic: a missing vault reverts the whole batch, so a merchant can
+/// only ever change vaults keyed to its own address (vault keys are
+/// `(user, merchant)`). Returns the number of vaults touched.
+fn apply_merchant_freeze(
+    env: &Env,
+    merchant: &Address,
+    subscribers: &Vec<Address>,
+    frozen: bool,
+) -> u32 {
+    assert!(!subscribers.is_empty(), "subscribers must not be empty");
+    assert!(
+        subscribers.len() <= MAX_BATCH_PULL_SUBSCRIBERS,
+        "batch size exceeds MAX_BATCH_PULL_SUBSCRIBERS"
+    );
+
+    let now = env.ledger().timestamp();
+    let mut touched: u32 = 0;
+    for user in subscribers.iter() {
+        let key = vault_key(&user, merchant);
+        let mut vault = load_vault(env, &key).expect("Vault does not exist");
+        let freeze_key = FeatureKey::MerchantFreeze(user.clone(), merchant.clone());
+
+        if frozen {
+            env.storage().persistent().set(&freeze_key, &true);
+        } else {
+            env.storage().persistent().remove(&freeze_key);
+            // Unfreezing restores pull eligibility. Like `resume_vault`, the
+            // billing clock restarts at unfreeze so the frozen period is not
+            // back-billed. A never-pulled vault (timestamp 0) keeps its immediate
+            // first-pull eligibility. A subscriber-initiated pause still applies.
+            if !vault.is_paused && vault.last_pull_timestamp != 0 {
+                vault.last_pull_timestamp = now;
+                save_vault(env, &key, &vault);
+            }
+        }
+
+        let (threshold, extend_to) = calculate_ttl_params(vault.interval_seconds);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, threshold, extend_to);
+        if frozen {
+            env.storage()
+                .persistent()
+                .extend_ttl(&freeze_key, threshold, extend_to);
+        }
+
+        let event = if frozen {
+            Symbol::new(env, "vault_frozen_by_merchant")
+        } else {
+            Symbol::new(env, "vault_unfrozen_by_merchant")
+        };
+        env.events()
+            .publish((event, user.clone(), merchant.clone()), ());
+        touched += 1;
+    }
+    touched
+}
+
 /// Require the caller to be the configured protocol admin. The first caller
 /// bootstraps the admin slot; every later call must match the stored address.
 fn bootstrap_or_require_admin(env: &Env, caller: &Address) {
@@ -1414,6 +1496,9 @@ fn clear_recovery_state(env: &Env, user: &Address, merchant: &Address) {
 /// emits `vault_cancelled`. Shared by direct and delegated cancellation.
 fn remove_vault(env: &Env, user: &Address, merchant: &Address) {
     let key = vault_key(user, merchant);
+    env.storage()
+        .persistent()
+        .remove(&FeatureKey::MerchantFreeze(user.clone(), merchant.clone()));
     let metered_key = MeteredVaultKey::Vault(user.clone(), merchant.clone());
 
     let has_fixed = env.storage().persistent().has(&key);
@@ -2453,6 +2538,7 @@ impl OrbitContract {
     }
 
     pub fn is_subscriber_active(env: Env, user: Address, merchant: Address) -> bool {
+        let frozen = is_merchant_frozen(&env, &user, &merchant);
         let key = VaultKey {
             user: user.clone(),
             merchant: merchant.clone(),
@@ -2466,6 +2552,7 @@ impl OrbitContract {
             (Some(vault), Some(badge)) => {
                 badge.active
                     && !vault.is_paused
+                    && !frozen
                     && env.ledger().timestamp() < badge.expiration_timestamp
             }
             _ => false,
@@ -3137,6 +3224,22 @@ impl OrbitContract {
         env.storage().instance().extend_ttl(threshold, extend_to);
     }
 
+    /// #353: merchant freezes many subscriber vaults in one transaction, e.g.
+    /// during an outage or a suspected breach. The merchant authorizes the whole
+    /// batch once. Pulls on a frozen vault revert with `VaultPaused` until
+    /// `batch_unpause_vaults` runs. Returns the number of vaults frozen.
+    pub fn batch_pause_vaults(env: Env, merchant: Address, subscribers: Vec<Address>) -> u32 {
+        merchant.require_auth();
+        apply_merchant_freeze(&env, &merchant, &subscribers, true)
+    }
+
+    /// #353: merchant restores pull eligibility for a batch of subscriber vaults
+    /// once service resumes. Does not lift a subscriber-initiated pause.
+    pub fn batch_unpause_vaults(env: Env, merchant: Address, subscribers: Vec<Address>) -> u32 {
+        merchant.require_auth();
+        apply_merchant_freeze(&env, &merchant, &subscribers, false)
+    }
+
     /// 2. THE PULL (Execute Billing)
     /// The merchant (or the Orbit backend) calls this to pull the funds.
     pub fn pull_funds(env: Env, user: Address, merchant: Address) {
@@ -3147,8 +3250,9 @@ impl OrbitContract {
         let key = vault_key(&user, &merchant);
         let mut vault = load_vault(&env, &key).expect("Vault does not exist");
 
-        // A paused subscriber is never billed (#93)
-        assert!(!vault.is_paused, "Vault is paused by subscriber");
+        // A paused subscriber is never billed (#93); a merchant freeze blocks
+        // pulls the same way (#353).
+        assert_vault_not_paused(&env, &vault, &user, &merchant);
 
         let current_time = env.ledger().timestamp();
 
@@ -3395,8 +3499,9 @@ impl OrbitContract {
             None => return skipped(0),
         };
 
-        // A paused subscriber is never billed (#93).
-        if vault.is_paused {
+        // A paused subscriber is never billed (#93), and neither is a vault the
+        // merchant has frozen (#353).
+        if vault.is_paused || is_merchant_frozen(env, subscriber, merchant) {
             return skipped(0);
         }
         if vault.payment_status == PAYMENT_DEFAULTED || vault_is_expired(env, &vault) {
@@ -5835,6 +5940,17 @@ impl OrbitContract {
         bootstrap_or_require_admin(&env, &caller);
     }
 
+    /// #354: swap this contract's WASM for bytecode that is already installed on
+    /// the network. The protocol admin must authorize the call. The deploy
+    /// orchestrator (`scripts/deploy.sh`) uploads the new build first, then calls
+    /// this, so re-running the script upgrades the existing contract in place.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        bootstrap_or_require_admin(&env, &caller);
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.events()
+            .publish((symbol_short!("upgraded"), caller), ());
+    }
+
     /// Halt every fund-moving entrypoint. Guarded by the protocol admin.
     pub fn pause(env: Env, caller: Address) {
         bootstrap_or_require_admin(&env, &caller);
@@ -6584,3 +6700,9 @@ mod test_fuzz;
 
 #[cfg(test)]
 mod test_storage;
+
+#[cfg(test)]
+mod test_batch_pause;
+
+#[cfg(test)]
+mod test_upgrade;
