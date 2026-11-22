@@ -91,6 +91,8 @@ import {
 } from "./walletDetection";
 import { parseReferralCode } from "./referral"; // #351
 import { initWalletAccountWatcher, promptWalletAccountSwitch } from "./accountSwitcher"; // #352
+import { DEFAULT_SANDBOX_SETTINGS, SANDBOX_PUBLIC_KEY, dispatchSandboxSubscription } from "./sandbox.js"; // #355
+import { SandboxToolbar } from "./SandboxToolbar.jsx"; // #355
 
 const STORAGE_KEY = "orbit:selected-wallet";
 const PENDING_KEY = "orbit:pending-transaction";
@@ -137,6 +139,9 @@ customClasses = {},
   customFields = [],
   captureEmail = false,
   onSuccess,
+  onError, // #355: called with { code, message } when a subscription fails
+  onClose, // #355: called when the customer closes or cancels checkout
+  sandbox = false, // #355: simulated wallet and settlement, no network or extension
   walletConnectProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID,
   termsUrl = "",
   privacyUrl = "",
@@ -147,6 +152,16 @@ customClasses = {},
   referralCode = "", // #351: customizable promotional referral tracking code
 }) {
   const isMobile = useMemo(() => isMobileBrowser(), []);
+
+  // #355 — sandbox mode: simulated wallet, developer toolbar, no network access
+  const [sandboxSettings, setSandboxSettings] = useState(DEFAULT_SANDBOX_SETTINGS);
+  const [sandboxStatus, setSandboxStatus] = useState("");
+  useEffect(() => {
+    if (sandbox) {
+      setAddress(SANDBOX_PUBLIC_KEY);
+      setIsDemo(false);
+    }
+  }, [sandbox]);
 
   // #351 — promotional referral tracking code (autodetect from prop or URL ?ref / ?aff)
   const activeReferralCode = useMemo(() => {
@@ -597,7 +612,7 @@ customClasses = {},
   };
 
   useEffect(() => {
-    if (!address || isDemo) return undefined;
+    if (!address || isDemo || sandbox) return undefined;
     const watcher = initWalletAccountWatcher({
       currentAddress: address,
       onAccountChange: handleAccountChange,
@@ -1033,6 +1048,7 @@ customClasses = {},
     setReceipt(null);
     setIsWrongNetwork(false);
     dispatch("orbit:close");
+    onClose?.();
   };
 
   const payWithAssets = useMemo(
@@ -1056,7 +1072,7 @@ customClasses = {},
     Boolean(selectedPayWith) && selectedPayWith.code !== PLAN_CURRENCY_CODE;
 
   useEffect(() => {
-    if (!address || !plan?.usdc_amount || !planCurrency || isDemo) {
+    if (!address || !plan?.usdc_amount || !planCurrency || isDemo || sandbox) {
       setUsdcReadiness(null); setUsdcCheckPending(false); setUsdcCheckError("");
       return undefined;
     }
@@ -1071,7 +1087,7 @@ customClasses = {},
 
   // Load the wallet's spendable balances once it connects
   useEffect(() => {
-    if (!address || isDemo) {
+    if (!address || isDemo || sandbox) {
       setPayWithBalances([]);
       return undefined;
     }
@@ -1317,7 +1333,46 @@ customClasses = {},
     setHandoverSession(null);
   };
 
+  // #355 — simulated settlement for sandbox mode. Resolves through the sandbox
+  // module only; no transaction is built, signed with a real wallet, or submitted.
+  const runSandboxSubscribe = async () => {
+    setError("");
+    setProcessing(true);
+    setConfirming(true);
+    try {
+      await dispatchSandboxSubscription({
+        planId: plan?.id || planId,
+        outcome: sandboxSettings.outcome,
+        delayMs: sandboxSettings.delayMs,
+        onTransition: setSandboxStatus,
+        onSuccess: (payload) => {
+          const subscriptionEventPayload = {
+            vaultId: payload.vaultId,
+            planId: payload.planId,
+            txHash: payload.txHash,
+            sandbox: true,
+          };
+          setReceipt({ vaultHash: payload.txHash, sandbox: true });
+          dispatch("orbit:subscribed", subscriptionEventPayload);
+          onSuccess?.(subscriptionEventPayload);
+        },
+        onError: (failure) => {
+          setError(failure.message);
+          dispatch("orbit:error", { message: failure.message });
+          onError?.(failure);
+        },
+      });
+    } finally {
+      setConfirming(false);
+      setProcessing(false);
+    }
+  };
+
   const subscribe = async () => {
+    if (sandbox) {
+      if (!validateForm()) return;
+      return runSandboxSubscribe();
+    }
     if (originVerification.strict && !originVerification.verified) {
       setError("Transaction signing is blocked because this site is not on the merchant's verified domain list.");
       return;
@@ -1584,6 +1639,7 @@ let hashes;
           "Authorization failed. No subscription was recorded.";
         setError(message);
         dispatch("orbit:error", { message });
+        onError?.({ code: "SUBSCRIBE_FAILED", message });
       }
     } finally {
       setConfirming(false);
@@ -1663,6 +1719,13 @@ let hashes;
       style={{ ...styles.card, ...rootStyle }}
       aria-label="Orbit checkout"
     >
+      {sandbox && (
+        <SandboxToolbar
+          settings={sandboxSettings}
+          onChange={setSandboxSettings}
+          status={sandboxStatus}
+        />
+      )}
       <style>{`
         .orbit-checkout-root { isolation: isolate; }
         .orbit-checkout-root .orbit-fee, .orbit-checkout-root .orbit-pending, .orbit-checkout-root .orbit-wrong-network {
@@ -2878,6 +2941,7 @@ let hashes;
             onClick={() => {
               setShowWallets(false);
               dispatch("orbit:close");
+              onClose?.();
             }}
           >
             Cancel
