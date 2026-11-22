@@ -74,6 +74,11 @@ pub enum OrbitContractError {
     /// #353: the vault is frozen, either by its subscriber (`pause_vault`) or by
     /// the merchant (`batch_pause_vaults`). Pulls revert with this code.
     VaultPaused = 318,
+    /// #363: revenue split basis points do not add up to exactly 10,000.
+    RevenueSplitBpsMismatch = 319,
+    /// #363: revenue split list is empty, too long, has a zero share or a
+    /// duplicate recipient.
+    InvalidRevenueSplit = 320,
 }
 
 /// Sentinel `pull_sequence` for a vault that has never settled a pull.
@@ -95,6 +100,16 @@ pub const REVENUE_ACC_SCALE: i128 = 1_000_000_000_000;
 
 /// Keeps revenue-pool creation and claim lookups within predictable resource bounds.
 pub const MAX_REVENUE_POOL_SHAREHOLDERS: u32 = 100;
+
+/// Upper bound on co-founder revenue split recipients (#363).
+pub const MAX_REVENUE_SPLITS: u32 = 10;
+
+/// Minimum lifetime of a stored revenue split config; each pull extends it (#363).
+pub const REVENUE_SPLIT_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+/// Upper bound on `get_vaults_batch` / `get_merchant_vaults_batch` lookups (#362),
+/// keeping a single simulation's read footprint bounded.
+pub const MAX_BATCH_VAULT_QUERY: u32 = 50;
 
 /// Upper bound on merchant-configured loyalty tiers (#180).
 pub const MAX_LOYALTY_TIERS: u32 = 10;
@@ -289,6 +304,15 @@ pub struct PaymentSplit {
     pub amount: i128,
     /// Token contract used for this recipient's payment (#301).
     pub token: Address,
+}
+
+/// One co-founder's share of a merchant's pull revenue (#363), in basis points
+/// of the settled amount. A merchant's shares must sum to exactly 10,000.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevenueSplit {
+    pub recipient: Address,
+    pub bps: u32,
 }
 
 /// Per-subscriber outcome of a `batch_pull_funds` call (#92). `success` is false
@@ -783,6 +807,8 @@ pub enum SubscriptionKey {
     EscrowPolicy(Address, Address),
     Escrow(u64),
     NextEscrowId,
+    /// #363: co-founder revenue splits for a merchant's pull settlements.
+    RevenueSplits(Address),
 }
 
 #[contracttype]
@@ -985,6 +1011,97 @@ fn pull_payment(
             &vault.amount_per_interval,
         );
     }
+}
+
+/// #363: reject split configs that would not conserve funds exactly.
+fn validate_revenue_splits(env: &Env, splits: &Vec<RevenueSplit>) {
+    if splits.is_empty() || splits.len() > MAX_REVENUE_SPLITS {
+        panic_with_error!(env, OrbitContractError::InvalidRevenueSplit);
+    }
+    let mut total: u64 = 0;
+    for (i, split) in splits.iter().enumerate() {
+        if split.bps == 0 {
+            panic_with_error!(env, OrbitContractError::InvalidRevenueSplit);
+        }
+        for earlier in splits.iter().take(i) {
+            if earlier.recipient == split.recipient {
+                panic_with_error!(env, OrbitContractError::InvalidRevenueSplit);
+            }
+        }
+        total += u64::from(split.bps);
+    }
+    if total != BPS_DENOMINATOR as u64 {
+        panic_with_error!(env, OrbitContractError::RevenueSplitBpsMismatch);
+    }
+}
+
+/// #363: each recipient's share of `amount`, rounded down; the last recipient
+/// takes the rounding remainder so the shares always sum to `amount`.
+fn revenue_split_shares(env: &Env, amount: i128, splits: &Vec<RevenueSplit>) -> Vec<i128> {
+    let mut shares = Vec::new(env);
+    let mut allocated: i128 = 0;
+    let last = splits.len() - 1;
+    for (i, split) in splits.iter().enumerate() {
+        let share = if i as u32 == last {
+            amount - allocated
+        } else {
+            amount
+                .checked_mul(i128::from(split.bps))
+                .expect("Revenue split overflow")
+                / BPS_DENOMINATOR
+        };
+        allocated += share;
+        shares.push_back(share);
+    }
+    shares
+}
+
+/// Settle a pull that is not held in escrow. Without a revenue split config the
+/// merchant receives everything; with one, each co-founder is paid their share
+/// directly in the same invocation (#363).
+fn settle_pull(env: &Env, user: &Address, merchant: &Address, vault: &VaultData) {
+    let splits_key = SubscriptionKey::RevenueSplits(merchant.clone());
+    let splits: Vec<RevenueSplit> = env
+        .storage()
+        .persistent()
+        .get(&splits_key)
+        .unwrap_or_else(|| Vec::new(env));
+    if splits.is_empty() {
+        pull_payment(env, user, merchant, vault, merchant);
+        return;
+    }
+
+    let contract = env.current_contract_address();
+    let token = token::Client::new(env, &vault.token);
+    // A cross-asset vault settles into this contract first; plain vaults move
+    // each share straight from the subscriber's allowance.
+    let via_swap = env
+        .storage()
+        .persistent()
+        .has(&SubscriptionKey::Swap(user.clone(), merchant.clone()));
+    if via_swap {
+        pull_payment(env, user, merchant, vault, &contract);
+    }
+    let shares = revenue_split_shares(env, vault.amount_per_interval, &splits);
+    for (split, share) in splits.iter().zip(shares.iter()) {
+        if share == 0 {
+            continue;
+        }
+        if via_swap {
+            token.transfer(&contract, &split.recipient, &share);
+        } else {
+            token.transfer_from(&contract, user, &split.recipient, &share);
+        }
+        env.events().publish(
+            (
+                Symbol::new(env, "revenue_split_paid"),
+                merchant.clone(),
+                split.recipient.clone(),
+            ),
+            share,
+        );
+    }
+    extend_key(env, &splits_key, vault.interval_seconds);
 }
 
 fn store_escrow(
@@ -2933,6 +3050,52 @@ impl OrbitContract {
         load_vault(&env, &vault_key(&user, &merchant))
     }
 
+    /// Read one subscriber's vaults with several merchants in a single call
+    /// (#362). Entry `i` is the vault for `merchants[i]`, or `None` when it does
+    /// not exist. Read-only: no authorization, no storage writes, no events.
+    pub fn get_vaults_batch(
+        env: Env,
+        user: Address,
+        merchants: Vec<Address>,
+    ) -> Vec<Option<VaultData>> {
+        assert!(
+            merchants.len() <= MAX_BATCH_VAULT_QUERY,
+            "batch size exceeds MAX_BATCH_VAULT_QUERY"
+        );
+        let mut vaults = Vec::new(&env);
+        for merchant in merchants.iter() {
+            let key = VaultKey {
+                user: user.clone(),
+                merchant,
+            };
+            vaults.push_back(load_vault(&env, &key));
+        }
+        vaults
+    }
+
+    /// Read a merchant's vaults with several subscribers in a single call
+    /// (#362). Entry `i` is the vault for `users[i]`, or `None` when it does not
+    /// exist. Read-only: no authorization, no storage writes, no events.
+    pub fn get_merchant_vaults_batch(
+        env: Env,
+        merchant: Address,
+        users: Vec<Address>,
+    ) -> Vec<Option<VaultData>> {
+        assert!(
+            users.len() <= MAX_BATCH_VAULT_QUERY,
+            "batch size exceeds MAX_BATCH_VAULT_QUERY"
+        );
+        let mut vaults = Vec::new(&env);
+        for user in users.iter() {
+            let key = VaultKey {
+                user,
+                merchant: merchant.clone(),
+            };
+            vaults.push_back(load_vault(&env, &key));
+        }
+        vaults
+    }
+
     /// Close a vault so the merchant can no longer pull from it.
     /// Only the user can cancel. A mutually configured early fee is transferred
     /// before the vault is removed; the remaining token allowance is untouched.
@@ -3349,12 +3512,18 @@ impl OrbitContract {
 
         let policy_key = SubscriptionKey::EscrowPolicy(user.clone(), merchant.clone());
         let policy: Option<EscrowPolicy> = env.storage().persistent().get(&policy_key);
-        let recipient = if policy.is_some() {
-            env.current_contract_address()
+        if policy.is_some() {
+            pull_payment(
+                &env,
+                &user,
+                &merchant,
+                &vault,
+                &env.current_contract_address(),
+            );
         } else {
-            merchant.clone()
-        };
-        pull_payment(&env, &user, &merchant, &vault, &recipient);
+            // #363: pays the merchant, or its co-founders per the revenue split.
+            settle_pull(&env, &user, &merchant, &vault);
+        }
         if let Some(policy) = policy {
             let pull_id = store_escrow(&env, &user, &merchant, &vault, &policy);
             extend_key(
@@ -3427,6 +3596,44 @@ impl OrbitContract {
             .persistent()
             .extend_ttl(&key, threshold, extend_to);
         env.storage().instance().extend_ttl(threshold, extend_to);
+    }
+
+    // --------------------------------------------------------------------
+    // REVENUE SPLITS (#363)
+    // --------------------------------------------------------------------
+
+    /// Split this merchant's non-escrow pull settlements between co-founders.
+    /// `splits` must hold 1 to `MAX_REVENUE_SPLITS` distinct recipients whose
+    /// basis points sum to exactly 10,000; otherwise the call reverts with
+    /// `RevenueSplitBpsMismatch` or `InvalidRevenueSplit`. Replaces any
+    /// previous config.
+    pub fn set_revenue_splits(env: Env, merchant: Address, splits: Vec<RevenueSplit>) {
+        merchant.require_auth();
+        validate_revenue_splits(&env, &splits);
+        let key = SubscriptionKey::RevenueSplits(merchant.clone());
+        env.storage().persistent().set(&key, &splits);
+        extend_key(&env, &key, REVENUE_SPLIT_TTL_SECONDS);
+        env.events()
+            .publish((Symbol::new(&env, "revenue_splits_set"), merchant), splits);
+    }
+
+    /// Remove the split config so pulls settle 100% to the merchant again.
+    pub fn clear_revenue_splits(env: Env, merchant: Address) {
+        merchant.require_auth();
+        env.storage()
+            .persistent()
+            .remove(&SubscriptionKey::RevenueSplits(merchant.clone()));
+        env.events()
+            .publish((Symbol::new(&env, "revenue_splits_cleared"), merchant), ());
+    }
+
+    /// The merchant's revenue split config; empty when pulls settle to the
+    /// merchant alone.
+    pub fn get_revenue_splits(env: Env, merchant: Address) -> Vec<RevenueSplit> {
+        env.storage()
+            .persistent()
+            .get(&SubscriptionKey::RevenueSplits(merchant))
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     // --------------------------------------------------------------------
@@ -3559,9 +3766,10 @@ impl OrbitContract {
         }
 
         // Routes through the vault's configured swap router when one exists;
-        // otherwise this is a direct token.transfer_from(subscriber -> merchant).
+        // otherwise this is a direct token.transfer_from(subscriber -> merchant),
+        // or one per co-founder when the merchant has revenue splits (#363).
         vault.amount_per_interval = amount;
-        pull_payment(env, subscriber, merchant, &vault, merchant);
+        settle_pull(env, subscriber, merchant, &vault);
 
         vault.amount_per_interval = base_amount;
         let interval_seconds = vault.interval_seconds;
@@ -6706,3 +6914,6 @@ mod test_batch_pause;
 
 #[cfg(test)]
 mod test_upgrade;
+
+#[cfg(test)]
+mod test_revenue_splits_batch;

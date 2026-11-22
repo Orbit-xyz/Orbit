@@ -116,6 +116,31 @@ An expired vault with remaining cap is reactivated. One
 `batch_vaults_renewed` event reports the number of renewed vaults and the
 latest new deadline.
 
+## Co-founder revenue splits (#363)
+
+`set_revenue_splits(merchant, splits)` stores up to `MAX_REVENUE_SPLITS` (10)
+`RevenueSplit { recipient, bps }` entries for a merchant. The basis points must
+sum to exactly 10,000 (`RevenueSplitBpsMismatch`, error 319); an empty list, a
+zero share or a repeated recipient fails with `InvalidRevenueSplit` (320).
+
+While a config exists, `pull_funds` and `batch_pull_funds` pay each recipient
+its share directly in the same invocation instead of paying the merchant.
+Shares round down and the last recipient receives the remainder, so the
+shares always add up to the settled amount. Plain vaults move each share
+straight from the subscriber's allowance; cross-asset vaults settle into the
+contract first and are then distributed. Vaults with dispute-protected escrow
+keep the escrow flow. Each payment emits `revenue_split_paid` and the config's
+TTL is extended on every pull. `clear_revenue_splits` returns to settling 100%
+to the merchant; `get_revenue_splits` returns the current config.
+
+## Batch vault queries (#362)
+
+`get_vaults_batch(user, merchants)` and `get_merchant_vaults_batch(merchant,
+users)` return one `Option<VaultData>` per input address, in input order, with
+`None` for pairs that have no vault. Expired vaults are returned with
+`payment_status == PAYMENT_EXPIRED`. Both are read-only (no auth, writes or
+events) and accept at most `MAX_BATCH_VAULT_QUERY` (50) addresses per call.
+
 ## Verification
 
 From `contracts/soroban`, run:
