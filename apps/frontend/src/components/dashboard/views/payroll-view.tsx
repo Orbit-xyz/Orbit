@@ -91,7 +91,6 @@ export interface PayrollViewProps {
   onUploadOpened?: () => void;
 }
 
-export function PayrollView({ autoOpenUpload, onUploadOpened }: PayrollViewProps = {}) {
 export interface MultiSigSigner {
   address: string;
   name: string;
@@ -118,7 +117,7 @@ export interface MultiSigProposal {
   settledAt?: string;
 }
 
-export function PayrollView() {
+export function PayrollView({ autoOpenUpload, onUploadOpened }: PayrollViewProps = {}) {
   const t = useTranslations("Tables");
   const { can } = useTeam();
   const canRunPayroll = can("runPayroll");
@@ -180,6 +179,19 @@ export function PayrollView() {
   const [signModalError, setSignModalError] = useState("");
   const [isExecutingMultiSig, setIsExecutingMultiSig] = useState(false);
   const [multiSigExecutedSuccess, setMultiSigExecutedSuccess] = useState<string | null>(null);
+  const [copiedProposalId, setCopiedProposalId] = useState<string | null>(null);
+
+  const handleCopyProposalLink = async (proposalId: string) => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const url = `${origin}/dashboard/payroll/proposal/${proposalId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedProposalId(proposalId);
+      setTimeout(() => setCopiedProposalId(null), 2500);
+    } catch {
+      // fallback
+    }
+  };
 
   const [proposals, setProposals] = useState<MultiSigProposal[]>([
     {
@@ -689,10 +701,29 @@ export function PayrollView() {
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500 mt-1">
+                        <span>
+                          Creator:{" "}
+                          <a
+                            href={`https://stellar.expert/explorer/testnet/account/${prop.creator}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-mono underline text-neutral-700 hover:text-black inline-flex items-center gap-0.5"
+                          >
+                            {prop.creator.slice(0, 6)}...{prop.creator.slice(-4)}
+                            <ExternalLink size={9} />
+                          </a>
+                        </span>
+                        <span>•</span>
+                        <span className="font-semibold text-neutral-800">
+                          Total Amount: ${totalAmount.toFixed(2)} USDC
+                        </span>
+                        <span>•</span>
+                        <span>{prop.recipients.length} recipients</span>
+                        <span>•</span>
                         <span>Created: {prop.createdAt}</span>
                         <span>•</span>
                         <span>
-                          Token: <code className="font-mono text-black font-semibold">{prop.tokenSymbol}</code> (SAC Contract:{" "}
+                          Token: <code className="font-mono text-black font-semibold">{prop.tokenSymbol}</code> (SAC:{" "}
                           <a
                             href={`https://stellar.expert/explorer/testnet/contract/${prop.tokenContract}`}
                             target="_blank"
@@ -709,11 +740,29 @@ export function PayrollView() {
 
                     <div className="flex items-center gap-2 shrink-0">
                       <button
+                        onClick={() => handleCopyProposalLink(prop.id)}
+                        className="button button-secondary text-xs h-9 px-3 flex items-center gap-1.5"
+                        title="Copy shareable proposal link for Discord / Telegram"
+                      >
+                        {copiedProposalId === prop.id ? (
+                          <>
+                            <Check size={13} className="text-emerald-600" />
+                            <span className="text-emerald-700 font-semibold">Link Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={13} />
+                            <span>Share Link</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
                         onClick={() => setInspectProposal(prop)}
                         className="button button-secondary text-xs h-9 px-3.5 flex items-center gap-1.5"
                       >
                         <Eye size={13} />
-                        <span>Inspect Split Breakdown</span>
+                        <span>Review & Sign</span>
                       </button>
 
                       <button
@@ -723,29 +772,29 @@ export function PayrollView() {
                           prop.status === "settled"
                             ? "bg-neutral-100 text-neutral-400 cursor-not-allowed"
                             : thresholdMet
-                            ? "bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer"
+                            ? "bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer shadow-sm"
                             : "bg-neutral-200 text-neutral-400 cursor-not-allowed"
                         }`}
                         title={
                           !thresholdMet
                             ? `Requires ${remaining} more signature(s) before batch execution`
-                            : "Execute batch disbursement on Stellar"
+                            : "Broadcast batch disbursement on Stellar"
                         }
                       >
                         {isExecutingMultiSig ? (
                           <>
                             <RotateCw size={13} className="animate-spin" />
-                            <span>Broadcasting Ledger Batch...</span>
+                            <span>Broadcasting Disbursement...</span>
                           </>
                         ) : prop.status === "settled" ? (
                           <>
                             <CheckCircle2 size={13} className="text-emerald-600" />
-                            <span>Settled</span>
+                            <span>Disbursed & Settled</span>
                           </>
                         ) : (
                           <>
                             <Zap size={13} className="fill-current text-black" />
-                            <span>Execute Batch ({totalAmount.toFixed(2)} USDC)</span>
+                            <span>Broadcast Disbursement ({totalAmount.toFixed(2)} USDC)</span>
                           </>
                         )}
                       </button>
@@ -1530,6 +1579,62 @@ export function PayrollView() {
                 </div>
               )}
 
+              {/* Connected Wallet Verification & Role State */}
+              {(() => {
+                const connectedAddr = user?.walletAddress || "";
+                const isAuthorized = Boolean(
+                  connectedAddr &&
+                    inspectProposal.signers.some(
+                      (s) => s.address.toLowerCase() === connectedAddr.toLowerCase() || s.role.includes("Signer #3")
+                    )
+                );
+                const currentSigner = inspectProposal.signers.find(
+                  (s) =>
+                    connectedAddr &&
+                    (s.address.toLowerCase() === connectedAddr.toLowerCase() || s.role.includes("Signer #3"))
+                );
+                const hasSigned = Boolean(currentSigner?.signed);
+
+                if (!isAuthorized) {
+                  return (
+                    <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 flex items-start gap-3">
+                      <Shield size={16} className="text-amber-400 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <div className="font-semibold text-white">View-Only Mode</div>
+                        <p className="text-neutral-400">
+                          Your connected wallet (
+                          <code className="font-mono text-neutral-300">
+                            {connectedAddr ? `${connectedAddr.slice(0, 8)}...${connectedAddr.slice(-6)}` : "No wallet connected"}
+                          </code>
+                          ) is not in the authorized signer list for this proposal. You may review the recipient split breakdown and audit trail in view-only mode, but only authorized multisig keys can submit cryptographic signatures.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="p-3.5 rounded-xl bg-neutral-50 border border-neutral-200 text-xs flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck size={16} className="text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-semibold text-neutral-900">Authorized Signer Detected:</span>{" "}
+                        <span className="text-neutral-600">{currentSigner?.name || "Treasury Co-Signer"} ({currentSigner?.role})</span>
+                      </div>
+                    </div>
+                    {hasSigned ? (
+                      <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono font-bold text-[10px] inline-flex items-center gap-1 border border-emerald-300">
+                        <Check size={10} /> Signature Submitted
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-mono font-bold text-[10px] inline-flex items-center gap-1 border border-amber-300">
+                        <Clock size={10} /> Signature Required
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Modal Footer / Signature action */}
               <div className="flex items-center justify-between pt-4 border-t border-black/10">
                 <button
@@ -1543,31 +1648,81 @@ export function PayrollView() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => handleSignProposal(inspectProposal.id)}
-                    disabled={
-                      isSigningFreighter ||
-                      inspectProposal.status === "settled" ||
-                      Boolean(inspectProposal.signers.find((s) => s.signed && s.role.includes("Signer #3")))
-                    }
-                    className="button button-primary text-xs h-9 px-4 bg-black text-white hover:bg-neutral-800 disabled:opacity-50 inline-flex items-center gap-1.5"
+                    onClick={() => handleCopyProposalLink(inspectProposal.id)}
+                    className="button button-secondary text-xs h-9 px-3.5 flex items-center gap-1.5"
+                    title="Copy shareable proposal link"
                   >
-                    {isSigningFreighter ? (
+                    {copiedProposalId === inspectProposal.id ? (
                       <>
-                        <RotateCw size={13} className="animate-spin" />
-                        <span>Signing with Freighter...</span>
-                      </>
-                    ) : inspectProposal.signers.find((s) => s.signed && s.role.includes("Signer #3")) ? (
-                      <>
-                        <Check size={13} className="text-emerald-400" />
-                        <span>Signed by You</span>
+                        <Check size={13} className="text-emerald-600" />
+                        <span className="text-emerald-700 font-semibold">Link Copied!</span>
                       </>
                     ) : (
                       <>
-                        <ShieldCheck size={13} className="text-emerald-400" />
-                        <span>Submit Signature (Freighter)</span>
+                        <Copy size={13} />
+                        <span>Copy Link</span>
                       </>
                     )}
                   </button>
+
+                  {(() => {
+                    const connectedAddr = user?.walletAddress || "";
+                    const isAuthorized = Boolean(
+                      connectedAddr &&
+                        inspectProposal.signers.some(
+                          (s) => s.address.toLowerCase() === connectedAddr.toLowerCase() || s.role.includes("Signer #3")
+                        )
+                    );
+                    const currentSigner = inspectProposal.signers.find(
+                      (s) =>
+                        connectedAddr &&
+                        (s.address.toLowerCase() === connectedAddr.toLowerCase() || s.role.includes("Signer #3"))
+                    );
+                    const hasSigned = Boolean(currentSigner?.signed);
+
+                    if (!isAuthorized) {
+                      return (
+                        <button
+                          type="button"
+                          disabled
+                          className="button button-secondary text-xs h-9 px-4 opacity-60 cursor-not-allowed inline-flex items-center gap-1.5"
+                        >
+                          <Lock size={13} />
+                          <span>View-Only Mode</span>
+                        </button>
+                      );
+                    }
+
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => handleSignProposal(inspectProposal.id)}
+                        disabled={
+                          isSigningFreighter ||
+                          inspectProposal.status === "settled" ||
+                          hasSigned
+                        }
+                        className="button button-primary text-xs h-9 px-4 bg-black text-white hover:bg-neutral-800 disabled:opacity-50 inline-flex items-center gap-1.5"
+                      >
+                        {isSigningFreighter ? (
+                          <>
+                            <RotateCw size={13} className="animate-spin" />
+                            <span>Signing with Freighter...</span>
+                          </>
+                        ) : hasSigned ? (
+                          <>
+                            <Check size={13} className="text-emerald-400" />
+                            <span>Signed by You</span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck size={13} className="text-emerald-400" />
+                            <span>Submit Signature (Freighter)</span>
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
