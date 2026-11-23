@@ -172,6 +172,26 @@ pub struct DelegatedVaultAuthorization {
     pub expiry_ledger: u32,
 }
 
+/// A single subscriber's authorization for atomic relayer-submitted batch
+/// onboarding (#379). The token and expiry are signed as well as the fields
+/// in the issue scope: without them a relayer could substitute a payment asset
+/// or use an authorization indefinitely.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegatedVaultAuth {
+    pub user: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_ledgers: u32,
+    pub nonce: u64,
+    pub expiry_ledger: u32,
+    pub signature: BytesN<64>,
+}
+
+/// Cap cryptographic checks and storage writes in one batch transaction.
+pub const MAX_DELEGATED_VAULT_BATCH: u32 = 20;
+
 /// Errors returned by `create_vault_delegated` (#296).
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -6116,6 +6136,78 @@ impl OrbitContract {
         Ok(())
     }
 
+    /// Create up to 20 vaults in one relayed transaction (#379).
+    ///
+    /// Each signed payload covers user, merchant, token, amount, interval,
+    /// nonce and expiry, plus the chain and this contract. The whole invocation
+    /// is atomic: invalid nonce, expiry, terms or Ed25519 signature reverts
+    /// **all** writes, including earlier entries in the vector. This avoids a
+    /// misleading partially accepted cohort. Nonces are checked and consumed
+    /// in input order, so duplicate authorizations in one batch cannot replay.
+    ///
+    /// The caller/relayer does not require any subscriber authorization beyond
+    /// the included Ed25519 signatures. Use `delegated_batch_vault_digest`
+    /// when constructing the signed message off-chain.
+    pub fn batch_create_vaults_delegated(
+        env: Env,
+        authorizations: Vec<DelegatedVaultAuth>,
+    ) -> Result<u32, DelegatedAuthError> {
+        if authorizations.is_empty() || authorizations.len() > MAX_DELEGATED_VAULT_BATCH {
+            return Err(DelegatedAuthError::InvalidAuthorization);
+        }
+        let mut created = 0u32;
+        for auth in authorizations.iter() {
+            // Soroban diagnostic logs retain the input position of the
+            // authorization being evaluated, including host crypto failures.
+            soroban_sdk::log!(&env, "delegated batch authorization index {}", created);
+            if env.ledger().sequence() > auth.expiry_ledger {
+                return Err(DelegatedAuthError::SignatureExpired);
+            }
+            let current_nonce = load_user_nonce(&env, &auth.user);
+            if auth.nonce != current_nonce {
+                return Err(DelegatedAuthError::InvalidNonce);
+            }
+            if auth.amount <= 0 || auth.interval_ledgers == 0 {
+                return Err(DelegatedAuthError::InvalidAuthorization);
+            }
+            let interval_seconds = u64::from(auth.interval_ledgers)
+                .checked_mul(SECONDS_PER_LEDGER)
+                .ok_or(DelegatedAuthError::InvalidAuthorization)?;
+            let pubkey = ed25519_account_key(&env, &auth.user)
+                .ok_or(DelegatedAuthError::InvalidSignature)?;
+            let digest = delegated_batch_vault_digest(&env, &auth);
+            // Invalid signatures abort at the host boundary. Soroban then
+            // rolls back the entire invocation and all earlier vault writes.
+            env.crypto().ed25519_verify(
+                &pubkey,
+                &Bytes::from_array(&env, &digest.to_array()),
+                &auth.signature,
+            );
+            bump_user_nonce(&env, &auth.user, current_nonce);
+            write_vault(
+                &env,
+                &auth.user,
+                &auth.merchant,
+                &auth.token,
+                auth.amount,
+                interval_seconds,
+                DEFAULT_GRACE_PERIOD_SECONDS,
+                0,
+                0,
+            );
+            env.events().publish(
+                (
+                    Symbol::new(&env, "vault_delegated"),
+                    auth.user,
+                    auth.merchant,
+                ),
+                (auth.token, auth.amount, auth.interval_ledgers, auth.nonce),
+            );
+            created = created.checked_add(1).expect("batch counter overflow");
+        }
+        Ok(created)
+    }
+
     // -----------------------------------------------------------------------
     // MULTI-SIG GOVERNANCE & TIMELOCK (#255)
     // -----------------------------------------------------------------------
@@ -7067,6 +7159,31 @@ pub fn batch_disburse_multisig_digest(
     )
 }
 
+/// Domain-separated digest for multi-subscriber delegated vault creation (#379).
+/// Unlike the single-vault digest it binds the signature specifically to the
+/// batch entrypoint. It also binds the contract and network to prevent replay
+/// on a different deployment or network. The signature itself is excluded.
+pub fn delegated_batch_vault_digest(
+    env: &Env,
+    authorization: &DelegatedVaultAuth,
+) -> BytesN<32> {
+    use soroban_sdk::xdr::ToXdr;
+    let mut data = env.current_contract_address().to_xdr(env);
+    data.append(&Bytes::from_array(
+        env,
+        &env.ledger().network_id().to_array(),
+    ));
+    data.append(&Symbol::new(env, "batch_create_vaults_delegated").to_xdr(env));
+    data.append(&authorization.user.clone().to_xdr(env));
+    data.append(&authorization.merchant.clone().to_xdr(env));
+    data.append(&authorization.token.clone().to_xdr(env));
+    data.extend_from_array(&authorization.amount.to_be_bytes());
+    data.extend_from_array(&authorization.interval_ledgers.to_be_bytes());
+    data.extend_from_array(&authorization.nonce.to_be_bytes());
+    data.extend_from_array(&authorization.expiry_ledger.to_be_bytes());
+    env.crypto().sha256(&data).to_bytes()
+}
+
 /// The Ed25519 key behind an account (`G...`) address, or `None` for any
 /// other address kind (e.g. a contract), which cannot sign with Ed25519.
 fn ed25519_account_key(env: &Env, user: &Address) -> Option<BytesN<32>> {
@@ -7303,3 +7420,6 @@ mod test_issues_223_226;
 
 #[cfg(test)]
 mod test_batch_cancel;
+
+#[cfg(test)]
+mod test_delegated_batch;

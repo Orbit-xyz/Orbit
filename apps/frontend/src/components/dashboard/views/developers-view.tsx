@@ -31,6 +31,7 @@ import { useAuth } from "@/lib/auth-context";
 import { ApiKeyRecord, WebhookEndpoint, WebhookDeliveryLog } from "../dashboard-types";
 import { CreateApiKeyModal } from "../modals/create-api-key-modal";
 import { ApiPlayground } from "../api-playground";
+import { ContractEventStream } from "../contract-event-stream";
 import { RegisterWebhookModal } from "../modals/register-webhook-modal";
 import { WebhookDeliveryDrawer } from "../drawers/webhook-delivery-drawer";
 import { DOCS_URL } from "@/lib/links";
@@ -1521,6 +1522,8 @@ print(f"Settled on Stellar: {pull.tx_hash}")`;
           </div>
         </div>
       </div>
+
+      <ContractEventStream />
 
       <ApiPlayground keys={keys} />
       {/* Modals & Drawers */}
