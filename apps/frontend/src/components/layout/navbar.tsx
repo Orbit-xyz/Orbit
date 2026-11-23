@@ -12,6 +12,7 @@ import { useAuth } from "@/lib/auth-context";
 import { DOCS_URL } from "@/lib/links";
 import { CurrencyRateTicker } from "@/components/layout/CurrencyRateTicker";
 import { LocaleSwitcher } from "./locale-switcher";
+import { WalletPopover } from "./wallet-popover";
 
 export function Navbar() {
   const t = useTranslations("Nav");
@@ -64,6 +65,7 @@ export function Navbar() {
           <LocaleSwitcher />
           {user ? (
             <div className="flex items-center gap-3">
+              <WalletPopover />
               <Link
                 className="button button-primary"
                 href="/dashboard"

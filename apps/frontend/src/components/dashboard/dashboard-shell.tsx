@@ -61,6 +61,7 @@ import { CreatePlanModal } from "./modals/create-plan-modal";
 import { CommandPalette } from "./modals/command-palette";
 import { ReportsTaxWizardModal } from "./modals/reports-tax-wizard-modal";
 import { NotificationDrawer } from "./drawers/notification-drawer";
+import { WalletPopover } from "@/components/layout/wallet-popover";
 import { NotificationToasts } from "./notification-toasts";
 import { DOCS_URL } from "@/lib/links";
 
@@ -609,6 +610,7 @@ export function DashboardShell() {
           </div>
 
           <div className="flex items-center gap-3">
+            <WalletPopover />
             {/* Quick Search / Command Palette Trigger (#308) */}
             <button
               onClick={() => setIsCommandPaletteOpen(true)}

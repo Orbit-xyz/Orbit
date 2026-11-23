@@ -387,6 +387,8 @@ pub enum DataKey {
     NextMilestoneEscrowId,
     /// #225: milestone-based payroll escrow with dispute arbiter.
     MilestoneEscrow(u64),
+    /// #373: dispute bond staked for a milestone escrow.
+    MilestoneDisputeBond(u64),
     /// Id the next Merkle payroll distribution will receive (#156)
     NextMerklePayrollId,
     MerklePayroll(u64),
@@ -765,6 +767,14 @@ pub struct MilestoneEscrow {
     pub released: Vec<bool>,
     pub released_amount: i128,
     pub status: MilestoneEscrowStatus,
+}
+
+/// Bond staked by a claimant when disputing a milestone escrow (#373).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeBondRecord {
+    pub claimant: Address,
+    pub amount: i128,
 }
 
 // ----------------------------------------------------------------------------
@@ -6396,6 +6406,7 @@ impl OrbitContract {
     }
 
     /// Either escrow party may escalate to the designated arbiter.
+    /// Initiating a dispute requires depositing a dispute bond (5% of remaining escrow amount, min 1).
     pub fn dispute_milestone_escrow(env: Env, caller: Address, escrow_id: u64) {
         caller.require_auth();
         let mut escrow = load_milestone_escrow(&env, escrow_id);
@@ -6407,20 +6418,55 @@ impl OrbitContract {
             escrow.status != MilestoneEscrowStatus::Refunded,
             "Escrow already finalized"
         );
+        assert!(
+            escrow.status != MilestoneEscrowStatus::Disputed,
+            "Escrow already disputed"
+        );
+
+        let remaining = escrow
+            .total_amount
+            .checked_sub(escrow.released_amount)
+            .expect("Released exceeds total amount");
+
+        // 5% dispute bond requirement (min 1)
+        let bond_amount = (remaining * 5 / 100).max(1);
+
+        // Custody bond from claimant to contract
+        token::Client::new(&env, &escrow.token).transfer(
+            &caller,
+            &env.current_contract_address(),
+            &bond_amount,
+        );
+
+        // Store bond record
+        let bond_key = DataKey::MilestoneDisputeBond(escrow_id);
+        env.storage().persistent().set(
+            &bond_key,
+            &DisputeBondRecord {
+                claimant: caller.clone(),
+                amount: bond_amount,
+            },
+        );
+
         escrow.status = MilestoneEscrowStatus::Disputed;
         save_milestone_escrow(&env, &escrow);
-        env.events()
-            .publish((Symbol::new(&env, "milestone_disputed"), escrow_id), caller);
+        env.events().publish(
+            (Symbol::new(&env, "milestone_disputed"), escrow_id, caller),
+            bond_amount,
+        );
     }
 
     /// Arbiter-only resolution. The two splits must equal the still-escrowed
     /// balance, so no tokens can be created or silently stranded.
-    pub fn resolve_dispute(
+    /// Legitimate disputes (frivolous = false) refund the staked bond to the claimant.
+    /// Frivolous disputes (frivolous = true) forfeit the bond to the counterparty (respondent).
+    pub fn resolve_dispute_with_ruling(
         env: Env,
         arbiter: Address,
         escrow_id: u64,
         employer_split: i128,
         contractor_split: i128,
+        frivolous: bool,
     ) {
         arbiter.require_auth();
         let mut escrow = load_milestone_escrow(&env, escrow_id);
@@ -6445,20 +6491,45 @@ impl OrbitContract {
             panic_with_error!(&env, OrbitContractError::InvalidDisputeSplit);
         }
         let contract = env.current_contract_address();
+        let token_client = token::Client::new(&env, &escrow.token);
+
         if employer_split > 0 {
-            token::Client::new(&env, &escrow.token).transfer(
+            token_client.transfer(
                 &contract,
                 &escrow.employer,
                 &employer_split,
             );
         }
         if contractor_split > 0 {
-            token::Client::new(&env, &escrow.token).transfer(
+            token_client.transfer(
                 &contract,
                 &escrow.contractor,
                 &contractor_split,
             );
         }
+
+        // Adjudicate dispute bond if one was staked (#373)
+        let bond_key = DataKey::MilestoneDisputeBond(escrow_id);
+        if let Some(bond) = env.storage().persistent().get::<_, DisputeBondRecord>(&bond_key) {
+            env.storage().persistent().remove(&bond_key);
+            if frivolous {
+                // Forfeit bond to counterparty (respondent)
+                let respondent = if bond.claimant == escrow.employer {
+                    escrow.contractor.clone()
+                } else {
+                    escrow.employer.clone()
+                };
+                token_client.transfer(&contract, &respondent, &bond.amount);
+            } else {
+                // Legitimate dispute: refund bond to claimant
+                token_client.transfer(&contract, &bond.claimant, &bond.amount);
+            }
+            env.events().publish(
+                (Symbol::new(&env, "dispute_bond_settled"), escrow_id, bond.claimant),
+                (bond.amount, frivolous),
+            );
+        }
+
         escrow.released_amount = escrow.total_amount;
         escrow.status = MilestoneEscrowStatus::Refunded;
         save_milestone_escrow(&env, &escrow);
@@ -6466,6 +6537,29 @@ impl OrbitContract {
             (Symbol::new(&env, "milestone_dispute_resolved"), escrow_id),
             (employer_split, contractor_split),
         );
+    }
+
+    /// Preserves existing signature for resolve_dispute defaulting to legitimate resolution.
+    pub fn resolve_dispute(
+        env: Env,
+        arbiter: Address,
+        escrow_id: u64,
+        employer_split: i128,
+        contractor_split: i128,
+    ) {
+        Self::resolve_dispute_with_ruling(
+            env,
+            arbiter,
+            escrow_id,
+            employer_split,
+            contractor_split,
+            false,
+        );
+    }
+
+    pub fn get_milestone_dispute_bond(env: Env, escrow_id: u64) -> Option<DisputeBondRecord> {
+        let bond_key = DataKey::MilestoneDisputeBond(escrow_id);
+        env.storage().persistent().get(&bond_key)
     }
 
     pub fn get_milestone_escrow(env: Env, escrow_id: u64) -> Option<MilestoneEscrow> {
@@ -6917,3 +7011,7 @@ mod test_upgrade;
 
 #[cfg(test)]
 mod test_revenue_splits_batch;
+mod test_issues_223_226;
+
+#[cfg(test)]
+mod test_batch_cancel;
