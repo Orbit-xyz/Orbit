@@ -29,6 +29,8 @@ pub const PAYMENT_GRACE_PERIOD: u32 = 1;
 pub const PAYMENT_DEFAULTED: u32 = 2;
 /// Terminal state once a vault's ledger expiration or lifetime cap is reached.
 pub const PAYMENT_EXPIRED: u32 = 3;
+pub const PAYMENT_CANCELLED: u32 = 4;
+pub const PRUNE_EXPIRATION_THRESHOLD_LEDGERS: u32 = 172_800;
 
 /// Explicit unbounded sentinels: ledger 0 is never reached by a live network,
 /// and -1 is the only negative lifetime cap accepted by validation.
@@ -380,6 +382,8 @@ pub enum DataKey {
     /// Id the next payroll proposal will receive
     NextProposalId,
     Proposal(u64),
+    ProposalExpiration(u64),
+    ProposalNonce(u64),
     /// Id the next payroll escrow deposit will receive
     NextPayrollEscrowId,
     PayrollEscrow(u64),
@@ -750,6 +754,7 @@ pub enum MilestoneEscrowStatus {
     Approved,
     Disputed,
     Refunded,
+    SettledMutual,
 }
 
 /// #225: milestone-based payroll escrow with an independent arbiter.
@@ -1691,6 +1696,14 @@ fn remove_vault(env: &Env, user: &Address, merchant: &Address) {
 pub struct DisbursalNonce {
     pub sender: Address,
     pub nonce: u64,
+}
+
+/// #345: Off-chain cryptographic signature from a verified treasury signer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignerSignature {
+    pub signer: Address,
+    pub signature: BytesN<64>,
 }
 
 // ----------------------------------------------------------------------------
@@ -3116,6 +3129,54 @@ impl OrbitContract {
         remove_vault(&env, &user, &merchant);
     }
 
+    /// Prune inactive or expired vault from persistent contract storage (#336).
+    /// Allowed only if vault status is Cancelled or if expiration_ledger has
+    /// elapsed by more than 172,800 ledgers (~10 days) with zero remaining allowance.
+    pub fn prune_vault(env: Env, user: Address, merchant: Address, caller: Address) {
+        caller.require_auth();
+        let key = vault_key(&user, &merchant);
+        let vault = load_vault(&env, &key).expect("Vault does not exist");
+
+        let is_cancelled = vault.payment_status == PAYMENT_CANCELLED;
+        let seq = env.ledger().sequence();
+        let is_expired_and_exhausted = if vault.expiration_ledger != UNLIMITED_EXPIRATION_LEDGER
+            && seq > vault.expiration_ledger.saturating_add(PRUNE_EXPIRATION_THRESHOLD_LEDGERS)
+        {
+            let zero_cap = vault.lifetime_cap_amount != UNLIMITED_LIFETIME_CAP
+                && vault.total_pulled_amount >= vault.lifetime_cap_amount;
+            let zero_sac = token::Client::new(&env, &vault.token)
+                .allowance(&user, &env.current_contract_address())
+                <= 0;
+            zero_cap || zero_sac
+        } else {
+            false
+        };
+
+        assert!(
+            is_cancelled || is_expired_and_exhausted,
+            "Vault does not meet pruning criteria"
+        );
+
+        env.storage().persistent().remove(&key);
+        env.storage().persistent().remove(&vault_schema_key(&key));
+        env.storage()
+            .persistent()
+            .remove(&vault_billing_schema_key(&key));
+        env.storage()
+            .persistent()
+            .remove(&SubscriptionKey::Swap(user.clone(), merchant.clone()));
+        env.storage()
+            .persistent()
+            .remove(&SubscriptionKey::EscrowPolicy(
+                user.clone(),
+                merchant.clone(),
+            ));
+        clear_recovery_state(&env, &user, &merchant);
+
+        env.events()
+            .publish((symbol_short!("pruned"), user, merchant), ());
+    }
+
     /// Configure mutually agreed early-cancellation terms for an existing vault.
     pub fn configure_cancellation_terms(
         env: Env,
@@ -4400,6 +4461,137 @@ impl OrbitContract {
         env.storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
+    }
+
+    /// Propose a batch disbursement with an explicit expiration ledger (#345).
+    pub fn propose_batch_disburse_multisig(
+        env: Env,
+        sender: Address,
+        token: Address,
+        splits: Vec<PaymentSplit>,
+        required_approvals: u32,
+        approvers: Vec<Address>,
+        expiration_ledger: u32,
+    ) -> u64 {
+        let id = Self::propose_batch_disburse(
+            env.clone(),
+            sender.clone(),
+            token,
+            splits,
+            required_approvals,
+            approvers,
+        );
+        let current_nonce = load_user_nonce(&env, &sender);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProposalExpiration(id), &expiration_ledger);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProposalNonce(id), &current_nonce);
+        id
+    }
+
+    /// Off-chain signature aggregation for delegated batch payroll sign-off (#345).
+    /// Allows any gas-sponsored relayer or automated bot to submit aggregated signatures.
+    pub fn batch_disburse_multisig(env: Env, batch_id: u64, signatures: Vec<SignerSignature>) {
+        assert_not_paused(&env);
+        let mut proposal = load_proposal(&env, batch_id);
+        assert!(!proposal.executed, "Proposal already executed");
+
+        let expiration_ledger = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProposalExpiration(batch_id))
+            .unwrap_or(u32::MAX);
+        assert!(
+            env.ledger().sequence() <= expiration_ledger,
+            "deadline exceeded"
+        );
+
+        let current_nonce = load_user_nonce(&env, &proposal.sender);
+        let expected_nonce = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProposalNonce(batch_id))
+            .unwrap_or(current_nonce);
+        assert!(current_nonce == expected_nonce, "invalid nonce");
+
+        assert!(
+            signatures.len() >= proposal.required_approvals,
+            "insufficient signatures"
+        );
+
+        let digest = multisig_batch_disburse_digest(
+            &env,
+            batch_id,
+            &proposal.sender,
+            &proposal.token,
+            &proposal.splits,
+            current_nonce,
+            expiration_ledger,
+        );
+
+        let mut verified_signers = Vec::new(&env);
+        for sig in signatures.iter() {
+            assert!(
+                proposal.approvers.contains(&sig.signer),
+                "signer not authorized"
+            );
+            assert!(
+                !verified_signers.contains(&sig.signer),
+                "duplicate signer"
+            );
+            verify_meta_signature(&env, &sig.signer, &digest, &sig.signature);
+            verified_signers.push_back(sig.signer);
+        }
+
+        assert!(
+            verified_signers.len() >= proposal.required_approvals,
+            "insufficient valid signatures"
+        );
+
+        bump_user_nonce(&env, &proposal.sender, current_nonce);
+
+        proposal.executed = true;
+        proposal.approvals = verified_signers;
+        save_proposal(&env, &proposal);
+
+        let total_amount = validate_splits(&proposal.splits);
+        let recipient_count = proposal.splits.len();
+        let totals = payroll_totals(&env, &proposal.splits);
+        verify_payroll_allowances(&env, &proposal.sender, &proposal.splits);
+        disburse(&env, &proposal.sender, proposal.splits.clone());
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "payroll_executed"),
+                proposal.sender.clone(),
+                batch_id,
+            ),
+            (proposal.token.clone(), recipient_count, total_amount),
+        );
+        let mut used_tokens = Vec::new(&env);
+        let mut volume_per_token = Vec::new(&env);
+        for (asset, volume) in totals.iter() {
+            used_tokens.push_back(asset);
+            volume_per_token.push_back(volume);
+        }
+        env.events().publish(
+            (
+                Symbol::new(&env, "payroll_summary"),
+                proposal.sender.clone(),
+                batch_id,
+            ),
+            (used_tokens, volume_per_token, recipient_count),
+        );
+        env.events().publish(
+            (
+                Symbol::new(&env, "batch_disbursed_multisig"),
+                proposal.sender,
+                batch_id,
+            ),
+            (proposal.token, recipient_count, total_amount),
+        );
     }
 
     // --------------------------------------------------------------------
@@ -6375,6 +6567,7 @@ impl OrbitContract {
         );
         if escrow.status == MilestoneEscrowStatus::Disputed
             || escrow.status == MilestoneEscrowStatus::Refunded
+            || escrow.status == MilestoneEscrowStatus::SettledMutual
             || escrow.released.get(milestone_index) == Some(true)
         {
             panic_with_error!(&env, OrbitContractError::MilestoneAlreadyReleased);
@@ -6415,7 +6608,8 @@ impl OrbitContract {
             "Only escrow parties may raise a dispute"
         );
         assert!(
-            escrow.status != MilestoneEscrowStatus::Refunded,
+            escrow.status != MilestoneEscrowStatus::Refunded
+                && escrow.status != MilestoneEscrowStatus::SettledMutual,
             "Escrow already finalized"
         );
         assert!(
@@ -6547,6 +6741,53 @@ impl OrbitContract {
         employer_split: i128,
         contractor_split: i128,
     ) {
+        let mut escrow = load_milestone_escrow(&env, escrow_id);
+        escrow.employer.require_auth();
+        escrow.contractor.require_auth();
+
+        assert!(
+            escrow.status != MilestoneEscrowStatus::Refunded
+                && escrow.status != MilestoneEscrowStatus::SettledMutual,
+            "Escrow already finalized"
+        );
+        assert!(
+            employer_split >= 0 && contractor_split >= 0,
+            "Settlement splits must be non-negative"
+        );
+        let remaining = escrow
+            .total_amount
+            .checked_sub(escrow.released_amount)
+            .expect("Released exceeds deposited amount");
+        let split_total = employer_split
+            .checked_add(contractor_split)
+            .expect("Settlement split overflow");
+        if split_total != remaining {
+            panic_with_error!(&env, OrbitContractError::InvalidDisputeSplit);
+        }
+        let contract = env.current_contract_address();
+        if employer_split > 0 {
+            token::Client::new(&env, &escrow.token).transfer(
+                &contract,
+                &escrow.employer,
+                &employer_split,
+            );
+        }
+        if contractor_split > 0 {
+            token::Client::new(&env, &escrow.token).transfer(
+                &contract,
+                &escrow.contractor,
+                &contractor_split,
+            );
+        }
+        escrow.released_amount = escrow.total_amount;
+        escrow.status = MilestoneEscrowStatus::SettledMutual;
+        save_milestone_escrow(&env, &escrow);
+        env.events().publish(
+            (Symbol::new(&env, "mutual_escrow_settled"), escrow_id),
+            (employer_split, contractor_split),
+        );
+    }
+
         Self::resolve_dispute_with_ruling(
             env,
             arbiter,
@@ -6776,6 +7017,53 @@ pub fn delegated_batch_disburse_digest(
         &params,
         nonce,
         u64::from(deadline_ledger),
+    )
+}
+
+/// Structured message digest for multi-sig batch disbursement (#345).
+/// Hashes batch_id, sender_vault, token, splits, nonce, and expiration_ledger.
+pub fn multisig_batch_disburse_digest(
+    env: &Env,
+    batch_id: u64,
+    sender_vault: &Address,
+    token: &Address,
+    splits: &Vec<PaymentSplit>,
+    nonce: u64,
+    expiration_ledger: u32,
+) -> BytesN<32> {
+    use soroban_sdk::xdr::ToXdr;
+    let mut params = batch_id.to_xdr(env);
+    params.append(&sender_vault.clone().to_xdr(env));
+    params.append(&token.clone().to_xdr(env));
+    for split in splits.iter() {
+        params.append(&split.to_xdr(env));
+    }
+    meta_digest(
+        env,
+        "batch_disburse_multisig",
+        &params,
+        nonce,
+        u64::from(expiration_ledger),
+    )
+}
+
+pub fn batch_disburse_multisig_digest(
+    env: &Env,
+    batch_id: u64,
+    sender_vault: &Address,
+    token: &Address,
+    splits: &Vec<PaymentSplit>,
+    nonce: u64,
+    expiration_ledger: u32,
+) -> BytesN<32> {
+    multisig_batch_disburse_digest(
+        env,
+        batch_id,
+        sender_vault,
+        token,
+        splits,
+        nonce,
+        expiration_ledger,
     )
 }
 

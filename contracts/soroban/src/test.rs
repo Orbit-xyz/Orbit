@@ -5485,3 +5485,492 @@ fn test_batch_renew_vaults_requires_one_user_authorization() {
         0
     );
 }
+
+// ---------------------------------------------------------------------------
+// #346: MUTUAL ESCROW SETTLEMENT TESTS
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mutual_escrow_settlement_full_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let employer = Address::generate(&env);
+    let contractor = Address::generate(&env);
+    let arbiter = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&employer, &1_000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let amounts = soroban_sdk::vec![&env, 400i128, 600i128];
+    let escrow_id = orbit.create_milestone_escrow(
+        &employer,
+        &contractor,
+        &arbiter,
+        &token_address,
+        &1_000,
+        &amounts,
+    );
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // Mutual full refund back to employer (employer: 1000, contractor: 0)
+    orbit.mutual_escrow_settlement(&escrow_id, &1_000, &0);
+
+    assert_eq!(token_client.balance(&employer), 1_000);
+    assert_eq!(token_client.balance(&contractor), 0);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    let escrow = orbit.get_milestone_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.status, MilestoneEscrowStatus::SettledMutual);
+    assert_eq!(escrow.released_amount, 1_000);
+
+    // Cannot settle again
+    assert!(orbit.try_mutual_escrow_settlement(&escrow_id, &1_000, &0).is_err());
+}
+
+#[test]
+fn test_mutual_escrow_settlement_full_payout() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let employer = Address::generate(&env);
+    let contractor = Address::generate(&env);
+    let arbiter = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&employer, &1_000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let amounts = soroban_sdk::vec![&env, 1_000i128];
+    let escrow_id = orbit.create_milestone_escrow(
+        &employer,
+        &contractor,
+        &arbiter,
+        &token_address,
+        &1_000,
+        &amounts,
+    );
+
+    // Mutual full contractor payout (employer: 0, contractor: 1000)
+    orbit.mutual_escrow_settlement(&escrow_id, &0, &1_000);
+
+    assert_eq!(token_client.balance(&employer), 0);
+    assert_eq!(token_client.balance(&contractor), 1_000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    let escrow = orbit.get_milestone_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.status, MilestoneEscrowStatus::SettledMutual);
+}
+
+#[test]
+fn test_mutual_escrow_settlement_partial_split_and_balance_conservation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let employer = Address::generate(&env);
+    let contractor = Address::generate(&env);
+    let arbiter = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&employer, &1_000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let amounts = soroban_sdk::vec![&env, 500i128, 500i128];
+    let escrow_id = orbit.create_milestone_escrow(
+        &employer,
+        &contractor,
+        &arbiter,
+        &token_address,
+        &1_000,
+        &amounts,
+    );
+
+    // Release first milestone normally (500)
+    orbit.approve_milestone(&employer, &escrow_id, &0);
+    assert_eq!(token_client.balance(&contractor), 500);
+
+    // Balance conservation: remaining balance is 500. Split total must equal 500.
+    // If sum is 499 or 501, it must fail!
+    assert!(orbit.try_mutual_escrow_settlement(&escrow_id, &250, &200).is_err());
+    assert!(orbit.try_mutual_escrow_settlement(&escrow_id, &300, &300).is_err());
+
+    // Valid partial split: employer 200, contractor 300
+    orbit.mutual_escrow_settlement(&escrow_id, &200, &300);
+
+    assert_eq!(token_client.balance(&employer), 200);
+    assert_eq!(token_client.balance(&contractor), 800); // 500 + 300
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_mutual_escrow_settlement_bypasses_dispute_and_arbiter() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let employer = Address::generate(&env);
+    let contractor = Address::generate(&env);
+    let arbiter = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+
+    token_admin_client.mint(&employer, &1_000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let amounts = soroban_sdk::vec![&env, 1_000i128];
+    let escrow_id = orbit.create_milestone_escrow(
+        &employer,
+        &contractor,
+        &arbiter,
+        &token_address,
+        &1_000,
+        &amounts,
+    );
+
+    // Escalate to dispute
+    orbit.dispute_milestone_escrow(&contractor, &escrow_id);
+    assert_eq!(
+        orbit.get_milestone_escrow(&escrow_id).unwrap().status,
+        MilestoneEscrowStatus::Disputed
+    );
+
+    // Mutual dual-signature settlement bypasses arbiter intervention!
+    orbit.mutual_escrow_settlement(&escrow_id, &500, &500);
+
+    let escrow = orbit.get_milestone_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.status, MilestoneEscrowStatus::SettledMutual);
+
+    // Later arbiter resolution is blocked
+    assert!(orbit.try_resolve_dispute(&arbiter, &escrow_id, &500, &500).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// #336: VAULT PRUNING TESTS
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_prune_vault_cancelled_vault_is_cleanly_removed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    orbit.create_vault(&user, &merchant, &token, &100, &100);
+    assert!(orbit.get_vault(&user, &merchant).is_some());
+
+    // Mark vault status as cancelled
+    env.as_contract(&contract_id, || {
+        let key = vault_key(&user, &merchant);
+        let mut vault = load_vault(&env, &key).unwrap();
+        vault.payment_status = PAYMENT_CANCELLED;
+        save_vault(&env, &key, &vault);
+    });
+
+    orbit.prune_vault(&user, &merchant, &caller);
+
+    assert!(orbit.get_vault(&user, &merchant).is_none());
+}
+
+#[test]
+fn test_prune_vault_expired_and_exhausted_is_pruned() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let caller = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+    token_admin_client.mint(&user, &1_000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let expiration_ledger = 100u32;
+    token_client.approve(&user, &contract_id, &100, &1_000);
+    orbit.create_vault_with_limits(
+        &user,
+        &merchant,
+        &token_address,
+        &100,
+        &10,
+        &expiration_ledger,
+        &100,
+    );
+
+    // Pull funds to exhaust lifetime cap (total_pulled = 100, lifetime_cap = 100)
+    orbit.pull_funds(&user, &merchant);
+
+    // Advance sequence past expiration_ledger + 172,800
+    env.ledger().set_sequence_number(expiration_ledger + PRUNE_EXPIRATION_THRESHOLD_LEDGERS + 1);
+
+    orbit.prune_vault(&user, &merchant, &caller);
+    assert!(orbit.get_vault(&user, &merchant).is_none());
+}
+
+#[test]
+fn test_prune_vault_rejects_active_unexpired_vault() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    orbit.create_vault(&user, &merchant, &token, &100, &100);
+
+    // Active unexpired vault cannot be pruned
+    assert!(orbit.try_prune_vault(&user, &merchant, &caller).is_err());
+    assert!(orbit.get_vault(&user, &merchant).is_some());
+}
+
+// ---------------------------------------------------------------------------
+// #345: OFF-CHAIN MULTISIG BATCH DISBURSEMENT TESTS
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_batch_disburse_multisig_threshold_and_replay_prevention() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (key1, signer1) = meta_signer(&env, 1);
+    let (key2, signer2) = meta_signer(&env, 2);
+    let (_key3, signer3) = meta_signer(&env, 3);
+    let (outsider_key, outsider) = meta_signer(&env, 99);
+
+    let sender = Address::generate(&env);
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_address);
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+    token_admin_client.mint(&sender, &1_000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    token_client.approve(&sender, &contract_id, &1_000, &10_000);
+
+    let splits = soroban_sdk::vec![
+        &env,
+        PaymentSplit {
+            recipient: recipient1.clone(),
+            amount: 300,
+            token: token_address.clone(),
+        },
+        PaymentSplit {
+            recipient: recipient2.clone(),
+            amount: 400,
+            token: token_address.clone(),
+        },
+    ];
+
+    let approvers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone(), signer3.clone()];
+    let expiration_ledger = 500u32;
+    let batch_id = orbit.propose_batch_disburse_multisig(
+        &sender,
+        &token_address,
+        &splits,
+        &2, // threshold 2 of 3
+        &approvers,
+        &expiration_ledger,
+    );
+
+    let nonce = orbit.get_user_nonce(&sender);
+    let digest = env.as_contract(&contract_id, || {
+        multisig_batch_disburse_digest(
+            &env,
+            batch_id,
+            &sender,
+            &token_address,
+            &splits,
+            nonce,
+            expiration_ledger,
+        )
+    });
+
+    let sig1 = meta_signature(&env, &key1, &digest);
+    let sig2 = meta_signature(&env, &key2, &digest);
+    let sig_outsider = meta_signature(&env, &outsider_key, &digest);
+
+    // 1. Insufficient signatures (1 of 2 required) reverts
+    let single_sig = soroban_sdk::vec![
+        &env,
+        SignerSignature {
+            signer: signer1.clone(),
+            signature: sig1.clone(),
+        },
+    ];
+    assert!(orbit.try_batch_disburse_multisig(&batch_id, &single_sig).is_err());
+
+    // 2. Duplicate signatures revert
+    let dup_sigs = soroban_sdk::vec![
+        &env,
+        SignerSignature {
+            signer: signer1.clone(),
+            signature: sig1.clone(),
+        },
+        SignerSignature {
+            signer: signer1.clone(),
+            signature: sig1.clone(),
+        },
+    ];
+    assert!(orbit.try_batch_disburse_multisig(&batch_id, &dup_sigs).is_err());
+
+    // 3. Unauthorized signer reverts
+    let bad_sigs = soroban_sdk::vec![
+        &env,
+        SignerSignature {
+            signer: signer1.clone(),
+            signature: sig1.clone(),
+        },
+        SignerSignature {
+            signer: outsider.clone(),
+            signature: sig_outsider.clone(),
+        },
+    ];
+    assert!(orbit.try_batch_disburse_multisig(&batch_id, &bad_sigs).is_err());
+
+    // 4. Valid 2-of-3 signatures submitted by a third-party relayer succeeds atomically!
+    let valid_sigs = soroban_sdk::vec![
+        &env,
+        SignerSignature {
+            signer: signer1.clone(),
+            signature: sig1.clone(),
+        },
+        SignerSignature {
+            signer: signer2.clone(),
+            signature: sig2.clone(),
+        },
+    ];
+
+    env.set_auths(&[]); // Prove relayer requires no interactive auth on sender/signers
+    orbit.batch_disburse_multisig(&batch_id, &valid_sigs);
+
+    assert_eq!(token_client.balance(&recipient1), 300);
+    assert_eq!(token_client.balance(&recipient2), 400);
+    assert_eq!(token_client.balance(&sender), 300); // 1000 - 700
+
+    // 5. Replay attempt reverts because nonce was consumed and proposal was executed!
+    assert!(orbit.try_batch_disburse_multisig(&batch_id, &valid_sigs).is_err());
+}
+
+#[test]
+fn test_batch_disburse_multisig_rejects_expired_ledger() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (key1, signer1) = meta_signer(&env, 1);
+    let (key2, signer2) = meta_signer(&env, 2);
+
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = StellarAssetClient::new(&env, &token_address);
+    token_admin_client.mint(&sender, &1_000);
+
+    let contract_id = env.register(OrbitContract, ());
+    let orbit = OrbitContractClient::new(&env, &contract_id);
+
+    let splits = soroban_sdk::vec![
+        &env,
+        PaymentSplit {
+            recipient: recipient.clone(),
+            amount: 500,
+            token: token_address.clone(),
+        },
+    ];
+    let approvers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+    let expiration_ledger = 100u32;
+    let batch_id = orbit.propose_batch_disburse_multisig(
+        &sender,
+        &token_address,
+        &splits,
+        &2,
+        &approvers,
+        &expiration_ledger,
+    );
+
+    // Fast-forward sequence past expiration_ledger
+    env.ledger().set_sequence_number(101);
+
+    let nonce = orbit.get_user_nonce(&sender);
+    let digest = env.as_contract(&contract_id, || {
+        multisig_batch_disburse_digest(
+            &env,
+            batch_id,
+            &sender,
+            &token_address,
+            &splits,
+            nonce,
+            expiration_ledger,
+        )
+    });
+    let sig1 = meta_signature(&env, &key1, &digest);
+    let sig2 = meta_signature(&env, &key2, &digest);
+
+    let sigs = soroban_sdk::vec![
+        &env,
+        SignerSignature {
+            signer: signer1.clone(),
+            signature: sig1,
+        },
+        SignerSignature {
+            signer: signer2.clone(),
+            signature: sig2,
+        },
+    ];
+
+    assert!(orbit.try_batch_disburse_multisig(&batch_id, &sigs).is_err());
+}

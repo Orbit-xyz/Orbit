@@ -487,6 +487,30 @@ fn test_compact_layout_round_trips_vault_data() {
     f.env.ledger().set_timestamp(4242);
     f.client.pull_funds(&f.user, &merchant);
 
+    assert_eq!(
+        f.client.get_vault(&f.user, &merchant),
+        Some(VaultData {
+            token: f.token_address.clone(),
+            amount_per_interval: AMOUNT,
+            interval_seconds: INTERVAL,
+            last_pull_timestamp: 4242,
+            grace_period_seconds: DEFAULT_GRACE_PERIOD_SECONDS,
+            payment_status: PAYMENT_ACTIVE,
+            initial_timestamp: 0,
+            pull_sequence: 0,
+            is_paused: false,
+            trial_end_timestamp: 0,
+            setup_fee: 0,
+            expiration_ledger: 0,
+            lifetime_cap_amount: -1,
+            total_pulled_amount: AMOUNT,
+            created_ledger: f.env.ledger().sequence(),
+            min_commitment_ledgers: 0,
+            early_cancellation_fee: 0,
+            settled_cycle_count: 1,
+            loyalty_discount_schedule: soroban_sdk::Vec::new(&f.env),
+        })
+    );
     let vault = f.client.get_vault(&f.user, &merchant).unwrap();
     assert_eq!(vault.grace_period_seconds, DEFAULT_GRACE_PERIOD_SECONDS);
     assert_eq!(vault.payment_status, PAYMENT_ACTIVE);

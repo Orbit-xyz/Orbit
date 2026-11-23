@@ -1,18 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Coins, CircleDollarSign, Landmark } from "lucide-react";
 
-type CurrencyId = "usdc" | "xlm" | "eurc";
-
-interface CurrencyRate {
+interface RateItem {
+  id: string;
   change24h: number;
   change24hPercent: number;
 }
 
-const CURRENCIES: { id: CurrencyId; label: string }[] = [
-  { id: "usdc", label: "USDC" },
-  { id: "xlm", label: "XLM" },
-  { id: "eurc", label: "EURC" },
+const CURRENCIES = [
+  { id: "usdc", label: "USDC", icon: CircleDollarSign },
+  { id: "xlm", label: "XLM", icon: Coins },
+  { id: "eurc", label: "EURC", icon: Landmark },
 ];
 
 const EMPTY_RATE: CurrencyRate = { change24h: 0, change24hPercent: 0 };
@@ -22,7 +22,9 @@ function emptyRates(): Record<CurrencyId, CurrencyRate> {
 }
 
 export function CurrencyRateTicker() {
-  const [rates, setRates] = useState<Record<CurrencyId, CurrencyRate>>(emptyRates);
+  const [rates, setRates] = useState<RateItem[]>(
+    CURRENCIES.map((c) => ({ id: c.id, change24h: 0, change24hPercent: 0 }))
+  );
   const [showPopover, setShowPopover] = useState(false);
 
   useEffect(() => {
@@ -56,36 +58,46 @@ export function CurrencyRateTicker() {
 
   return (
     <div className="relative flex items-center gap-2">
-      {CURRENCIES.map((currency) => (
-        <span key={currency.id} className="text-sm">
-          {currency.label} {formatPercent(rates[currency.id].change24hPercent)}
-        </span>
-      ))}
+      {CURRENCIES.map((currency) => {
+        const Icon = currency.icon;
+        const rateData = rates.find((r) => r.id === currency.id) || { id: currency.id, change24h: 0, change24hPercent: 0 };
 
-      <button
-        type="button"
-        className="cursor-pointer text-sm"
-        aria-expanded={showPopover}
-        onClick={() => setShowPopover((open) => !open)}
-      >
-        Rates
-      </button>
+        return (
+          <span key={currency.id} className="text-xs flex items-center gap-1 font-mono text-neutral-600">
+            <Icon size={12} /> {currency.label} {rateData.change24hPercent >= 0 ? "+" : ""}{rateData.change24hPercent}%
+          </span>
+        );
+      })}
 
-      {showPopover && (
-        <div className="absolute right-0 top-full z-50 mt-2 rounded bg-white p-2 text-sm text-neutral-900 shadow">
-          {CURRENCIES.map((currency) => {
-            const rate = rates[currency.id];
-            const upClass = rate.change24h >= 0 ? "text-green-500" : "text-red-500";
-            return (
-              <div key={currency.id} className="flex items-center justify-between gap-4">
-                <span>{currency.label}</span>
-                <span className={upClass}>{formatPercent(rate.change24hPercent)}</span>
-              </div>
-            );
-          })}
-          <p className="text-neutral-500">Last updated: {new Date().toLocaleTimeString()}</p>
-        </div>
-      )}
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setShowPopover(!showPopover)}
+          className="text-xs cursor-pointer font-mono text-neutral-500 hover:text-black"
+        >
+          💱 Rates
+        </button>
+
+        {showPopover && (
+          <div className="absolute right-0 top-full mt-2 bg-white rounded-lg shadow-lg border border-neutral-200 p-3 text-xs min-w-[140px] z-50">
+            {CURRENCIES.map((currency) => {
+              const rateData = rates.find((r) => r.id === currency.id) || { id: currency.id, change24h: 0, change24hPercent: 0 };
+              const upClass = rateData.change24h >= 0 ? "text-green-600 font-semibold" : "text-red-600 font-semibold";
+              return (
+                <div key={currency.id} className="flex items-center justify-between py-1">
+                  <span className="font-medium text-neutral-800">{currency.label}</span>
+                  <span className={upClass}>
+                    {rateData.change24hPercent >= 0 ? "+" : ""}{rateData.change24hPercent}%
+                  </span>
+                </div>
+              );
+            })}
+            <p className="text-[10px] text-neutral-400 mt-2 border-t pt-1">
+              Updated: {new Date().toLocaleTimeString()}
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

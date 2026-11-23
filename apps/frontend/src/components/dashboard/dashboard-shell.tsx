@@ -756,7 +756,7 @@ export function DashboardShell() {
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
-        onNavigateTab={(tab) => {
+        onNavigateTab={(tab: DashboardTab) => {
           setActiveTab(tab);
           setIsMobileMenuOpen(false);
         }}
