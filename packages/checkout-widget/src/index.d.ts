@@ -23,7 +23,7 @@ export interface OrbitCustomField {
 
 export interface OrbitReadyEvent { type: 'orbit:ready'; planId?: string; }
 export interface OrbitWalletConnectedEvent { type: 'orbit:wallet_connected'; address: string; type?: 'wallet' | 'passkey' | 'wallet_connect'; isNew?: boolean; }
-export interface OrbitSubscribedEvent { type: 'orbit:subscribed'; subscriptionId?: string; planId?: string; txHash: string; metadata?: Record<string, any>; couponCode?: string; }
+export interface OrbitSubscribedEvent { type: 'orbit:subscribed'; subscriptionId?: string; planId?: string; txHash: string; metadata?: Record<string, any>; couponCode?: string; cadence?: 'weekly' | 'monthly' | 'annual' | string; }
 export interface OrbitErrorEvent { type: 'orbit:error'; message: string; }
 export interface OrbitCloseEvent { type: 'orbit:close'; }
 export interface OrbitBridgeFundsArrivedEvent { type: 'orbit:bridge_funds_arrived'; address: string; balance: number; }
@@ -48,7 +48,9 @@ export interface OrbitCheckoutProps {
   allowedOrigins?: string[];
   customFields?: OrbitCustomField[];
   captureEmail?: boolean;
-  onSuccess?: (event: OrbitSubscribedEvent & { email?: string }) => void;
+  /** #376: customizable recurring billing cadence options (weekly, monthly, annual) */
+  cadences?: ('weekly' | 'monthly' | 'annual')[] | ('weekly' | 'monthly' | 'annual') | string[];
+  onSuccess?: (event: OrbitSubscribedEvent & { email?: string; cadence?: string }) => void;
   onError?: (error: { code: string; message: string }) => void;
   onClose?: () => void;
   /** #355: simulated wallet and settlement with a developer toolbar. Never touches the network. */

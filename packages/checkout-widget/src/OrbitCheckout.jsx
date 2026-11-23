@@ -4,6 +4,13 @@ import { classifyLatency, probeRpcWithFallback } from "./rpcLatency";
 import { calculateSetupFeeBreakdown, initialAuthAmountWithSetupFee } from "./setupFee";
 import { checkUsdcReadiness, usdcReadinessMessage } from "./usdcReadiness";
 import { formatPromoTerms, promoAuthorization, validatePromoCode } from "./promo";
+import {
+  normalizeCadences,
+  getCadenceSavingsBadge,
+  formatCadenceLabel,
+  formatCadenceInterval,
+  resolveCadencePlan,
+} from "./cadenceSwitcher";
 import { CHECKOUT_EVENTS, createCheckoutMessageBridge } from "./checkoutMessageBridge";
 import gsap from "gsap";
 import {
@@ -142,6 +149,7 @@ customClasses = {},
   allowedOrigins = DEFAULT_ALLOWED_ORIGINS,
   customFields = [],
   captureEmail = false,
+  cadences,
   onSuccess,
   onError, // #355: called with { code, message } when a subscription fails
   onClose, // #355: called when the customer closes or cancels checkout
@@ -273,6 +281,23 @@ customClasses = {},
     : null;
 
   const [plan, setPlan] = useState(planData || null);
+  const availableCadences = useMemo(
+    () => normalizeCadences(cadences || planData?.cadences || plan?.cadences),
+    [cadences, planData?.cadences, plan?.cadences]
+  );
+  const [selectedCadence, setSelectedCadence] = useState(() =>
+    availableCadences.length > 0 ? availableCadences[0] : "monthly"
+  );
+  useEffect(() => {
+    if (availableCadences.length > 0 && !availableCadences.includes(selectedCadence)) {
+      setSelectedCadence(availableCadences[0]);
+    }
+  }, [availableCadences, selectedCadence]);
+
+  const activePlan = useMemo(
+    () => (plan ? resolveCadencePlan(plan, selectedCadence) : null),
+    [plan, selectedCadence]
+  );
   const [originVerification, setOriginVerification] = useState({
     checking: true,
     verified: true,
@@ -1385,6 +1410,7 @@ customClasses = {},
             vaultId: payload.vaultId,
             planId: payload.planId,
             txHash: payload.txHash,
+            cadence: selectedCadence,
             sandbox: true,
           };
           setReceipt({ vaultHash: payload.txHash, sandbox: true });
@@ -1470,20 +1496,21 @@ customClasses = {},
         return;
       }
 
+      const planToUse = activePlan || plan;
       const activeWallet = passkeyAdapter || StellarWalletsKit;
       const preflight = await preflightPlan({
         wallet: activeWallet,
         address,
-        merchantAddress: plan.merchants.wallet_address,
-        amount: plan.usdc_amount,
-        intervalSeconds: plan.interval_seconds,
+        merchantAddress: planToUse.merchants.wallet_address,
+        amount: planToUse.usdc_amount,
+        intervalSeconds: planToUse.interval_seconds,
         orbitContractId,
         tokenContractId,
         rpcUrl,
         networkPassphrase,
       });
       if (!isSwap) {
-        const current = await checkUsdcReadiness({ horizonUrl, address, asset: planCurrency, amount: plan.usdc_amount });
+        const current = await checkUsdcReadiness({ horizonUrl, address, asset: planCurrency, amount: planToUse.usdc_amount });
         setUsdcReadiness(current);
         if (current.status !== "ready") throw new Error(usdcReadinessMessage(current));
       }
@@ -1492,9 +1519,9 @@ customClasses = {},
           "Waiting for a live swap quote. Try again in a moment.",
         );
       }
-      if (isSwap && !plan.swap_router_address) {
+      if (isSwap && !planToUse.swap_router_address) {
         throw new Error(
-          `${plan.merchants?.name || "This merchant"} does not accept ${selectedPayWith.code} yet. Choose ${PLAN_CURRENCY_CODE} to continue.`,
+          `${planToUse.merchants?.name || "This merchant"} does not accept ${selectedPayWith.code} yet. Choose ${PLAN_CURRENCY_CODE} to continue.`,
         );
       }
 
@@ -1504,6 +1531,8 @@ customClasses = {},
         ...baseAuthTerms,
         amount: initialAuthAmountWithSetupFee(baseAuthTerms.amount, setupFee),
       };
+      // #299: with a promo, the vault and allowance follow the discounted schedule
+      const authTerms = promoAuthorization(planToUse, appliedCoupon);
       setConfirming(true);
       setConfirmingSeconds(60);
 
@@ -1514,9 +1543,9 @@ let hashes;
           vaultHash: await authorizeSwapPlan({
             wallet: activeWallet,
             address,
-            merchantAddress: plan.merchants.wallet_address,
+            merchantAddress: planToUse.merchants.wallet_address,
             amount: authTerms.amount,
-            intervalSeconds: plan.interval_seconds,
+            intervalSeconds: planToUse.interval_seconds,
             orbitContractId,
             settlementTokenContractId: tokenContractId,
             rpcUrl,
@@ -1526,18 +1555,18 @@ let hashes;
               selectedPayWith,
               networkPassphrase,
             ),
-            routerAddress: plan.swap_router_address,
+            routerAddress: planToUse.swap_router_address,
             maxInputStroops: swapQuote.maxInputStroops,
             onSubmitted: ({ stage, hash }) => {
               localStorage.setItem(
                 PENDING_KEY,
-                JSON.stringify({ stage, hash, planId: plan.id || planId }),
+                JSON.stringify({ stage, hash, planId: planToUse.id || planId }),
               );
               savePendingSession({
                 hash,
                 stage,
-                planId: plan.id || planId,
-                merchantAddress: plan.merchant_address,
+                planId: planToUse.id || planId,
+                merchantAddress: planToUse.merchant_address,
               }); // #265
               setPending({ stage, hash });
             },
@@ -1550,9 +1579,9 @@ let hashes;
         hashes = await authorizePlanAtomic({
           wallet: activeWallet,
           address,
-          merchantAddress: plan.merchants.wallet_address,
+          merchantAddress: planToUse.merchants.wallet_address,
           amount: authTerms.amount,
-          intervalSeconds: plan.interval_seconds,
+          intervalSeconds: planToUse.interval_seconds,
           billingCycles: authTerms.billingCycles,
           orbitContractId,
           tokenContractId,
@@ -1568,7 +1597,7 @@ let hashes;
               JSON.stringify({
                 stage,
                 hash,
-                planId: plan.id || planId,
+                planId: planToUse.id || planId,
                 sponsored,
               }),
             );
@@ -1580,9 +1609,9 @@ let hashes;
       } else {
         const preflight = await preflightPlan({
           address,
-          merchantAddress: plan.merchants.wallet_address,
+          merchantAddress: planToUse.merchants.wallet_address,
           amount: authTerms.amount,
-          intervalSeconds: plan.interval_seconds,
+          intervalSeconds: planToUse.interval_seconds,
           billingCycles: authTerms.billingCycles,
           orbitContractId,
           tokenContractId,
@@ -1594,9 +1623,9 @@ let hashes;
         hashes = await authorizePlan({
           wallet: activeWallet,
           address,
-          merchantAddress: plan.merchants.wallet_address,
+          merchantAddress: planToUse.merchants.wallet_address,
           amount: authTerms.amount,
-          intervalSeconds: plan.interval_seconds,
+          intervalSeconds: planToUse.interval_seconds,
           billingCycles: authTerms.billingCycles,
           orbitContractId,
           tokenContractId,
@@ -1660,11 +1689,12 @@ let hashes;
       const subscriptionEventPayload = {
         vaultId: subscription.vault_id || subscription.vaultId || subscription.id,
         subscriptionId: subscription.id,
-        planId: plan.id || planId,
+        planId: (planToUse && planToUse.id) || plan.id || planId,
         txHash: hashes.vaultHash,
         metadata: finalMetadata,
         referralCode: activeReferralCode || undefined,
         couponCode: appliedCoupon?.code,
+        cadence: selectedCadence,
         ...(captureEmail && customerEmail.trim() ? { email: customerEmail.trim() } : {}),
       };
       dispatch('orbit:subscribed', subscriptionEventPayload);
@@ -1736,10 +1766,11 @@ let hashes;
 
   const targetNetworkName =
     networkPassphrase === Networks.PUBLIC ? "Mainnet" : "Testnet";
-  const planAmountUsdc = (Number(plan.usdc_amount) / 10000000).toFixed(2);
+  const displayPlan = activePlan || plan;
+  const planAmountUsdc = (Number(displayPlan.usdc_amount) / 10000000).toFixed(2);
   const planIntervalDays = Math.max(
     1,
-    Math.round(Number(plan.interval_seconds) / 86400),
+    Math.round(Number(displayPlan.interval_seconds) / 86400),
   );
   // #299: badge text and the allowance the subscriber is about to sign
   const promoTerms = appliedCoupon ? formatPromoTerms(appliedCoupon) : null;
@@ -1860,6 +1891,69 @@ let hashes;
           </div>
         )}
       </div>
+
+      {/* Cadence Switcher (#376) */}
+      {availableCadences.length > 1 && (
+        <div
+          role="radiogroup"
+          aria-label="Billing cadence"
+          className="orbit-cadence-toggle"
+          style={{
+            display: "inline-flex",
+            padding: 3,
+            background: "var(--orbit-surface-alt, rgba(0, 0, 0, 0.05))",
+            borderRadius: 8,
+            gap: 4,
+            margin: "12px 0 16px",
+            border: "1px solid var(--orbit-border, #e5e7eb)",
+          }}
+        >
+          {availableCadences.map((c) => {
+            const isSelected = selectedCadence === c;
+            const savings = getCadenceSavingsBadge(c);
+            return (
+              <button
+                key={c}
+                type="button"
+                role="radio"
+                aria-checked={isSelected}
+                onClick={() => setSelectedCadence(c)}
+                style={{
+                  border: 0,
+                  cursor: "pointer",
+                  borderRadius: 6,
+                  padding: "6px 12px",
+                  fontSize: 13,
+                  fontWeight: isSelected ? 600 : 500,
+                  background: isSelected ? "var(--orbit-surface, #ffffff)" : "transparent",
+                  color: isSelected ? "var(--orbit-text, #000000)" : "var(--orbit-muted, #6b7280)",
+                  boxShadow: isSelected ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <span>{formatCadenceLabel(c)}</span>
+                {savings && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: "2px 6px",
+                      borderRadius: 999,
+                      background: "rgba(16, 185, 129, 0.15)",
+                      color: "#059669",
+                    }}
+                  >
+                    {savings}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {promoTerms ? (
         <>

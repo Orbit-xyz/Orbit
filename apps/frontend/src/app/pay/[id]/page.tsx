@@ -9,6 +9,7 @@ import { connectFreighter } from "@/lib/freighter";
 import { ORBIT_API_URL } from "@/lib/api";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
 import { createCheckoutVault } from "@/lib/checkout-soroban";
+import { DunningGraceBanner } from "@/components/dashboard/dunning-grace-banner";
 
 interface HostedLinkOptions {
   cta_text: string;
@@ -42,6 +43,21 @@ export default function HostedCheckoutPage({ params }: { params: Promise<{ id: s
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
   const [imageError, setImageError] = useState(false);
+  const [isRecovery, setIsRecovery] = useState(false);
+  const [graceUntil, setGraceUntil] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("recovery") === "true" || sp.get("past_due") === "true") {
+        setIsRecovery(true);
+        const customExpiry = sp.get("grace_until") || sp.get("expires_at");
+        setGraceUntil(
+          customExpiry || new Date(Date.now() + 3 * 86400 * 1000).toISOString()
+        );
+      }
+    }
+  }, []);
 
   // Compute final redirect URL with vault_id and tx_hash
   const getSuccessRedirectUrl = useCallback(() => {
@@ -168,6 +184,16 @@ export default function HostedCheckoutPage({ params }: { params: Promise<{ id: s
         </div>
       </div>
       <div className="p-7 space-y-6">
+        {isRecovery && graceUntil && (
+          <DunningGraceBanner
+            subscriptionId={id}
+            planName={hostedLink?.title || plan.name}
+            merchantName={hostedLink?.headline || plan.merchants.name}
+            amountUsdc={amount.toFixed(2)}
+            expiresAt={graceUntil}
+            onRetry={address ? authorize : connect}
+          />
+        )}
         {txHash ? (
           <div className="text-center space-y-4">
             <CheckCircle2 className="mx-auto text-emerald-600" size={52} />

@@ -376,6 +376,64 @@ fn test_milestone_dispute_is_arbiter_only_and_splits_remaining_balance() {
     assert_eq!(escrow.released_amount, 1_000);
 }
 
+#[test]
+fn test_milestone_dispute_bond_frivolous_penalty_forfeits_to_counterparty() {
+    let f = fixture();
+    let contractor = Address::generate(&f.env);
+    let arbiter = Address::generate(&f.env);
+
+    let id = f.orbit.create_milestone_escrow(
+        &f.user,
+        &contractor,
+        &arbiter,
+        &f.token,
+        &1_000,
+        &soroban_sdk::vec![&f.env, 400i128, 600i128],
+    );
+    f.orbit.approve_milestone(&f.user, &id, &0);
+    assert_eq!(f.token_client.balance(&contractor), 400);
+
+    // Contractor initiates dispute: 5% bond on 600 remaining = 30 bond
+    f.orbit.dispute_milestone_escrow(&contractor, &id);
+    assert_eq!(f.token_client.balance(&contractor), 370);
+    assert_eq!(f.token_client.balance(&f.orbit.address), 630);
+
+    let bond_record = f.orbit.get_milestone_dispute_bond(&id).unwrap();
+    assert_eq!(bond_record.claimant, contractor);
+    assert_eq!(bond_record.amount, 30);
+
+    // Arbiter resolves dispute with frivolous = true (employer gets 500, contractor 100).
+    // Frivolous penalty: bond (30) is forfeited to employer (counterparty).
+    f.orbit.resolve_dispute_with_ruling(&arbiter, &id, &500, &100, &true);
+
+    // Employer gets: initial 999_000 + 500 split + 30 forfeited bond = 999_530
+    assert_eq!(f.token_client.balance(&f.user), 999_530);
+    // Contractor gets: 370 + 100 split (bond forfeited) = 470
+    assert_eq!(f.token_client.balance(&contractor), 470);
+    assert_eq!(f.token_client.balance(&f.orbit.address), 0);
+    assert!(f.orbit.get_milestone_dispute_bond(&id).is_none());
+}
+
+#[test]
+fn test_milestone_dispute_rejects_when_bond_balance_is_insufficient() {
+    let f = fixture();
+    let contractor = Address::generate(&f.env);
+    let arbiter = Address::generate(&f.env);
+
+    let id = f.orbit.create_milestone_escrow(
+        &f.user,
+        &contractor,
+        &arbiter,
+        &f.token,
+        &1_000,
+        &soroban_sdk::vec![&f.env, 400i128, 600i128],
+    );
+    // Neither milestone approved yet, contractor has 0 tokens
+    assert_eq!(f.token_client.balance(&contractor), 0);
+    // Attempting dispute requires 5% of 1000 = 50 tokens, so it fails due to lack of balance
+    assert!(f.orbit.try_dispute_milestone_escrow(&contractor, &id).is_err());
+}
+
 // ---------------------------------------------------------------------------
 // #226: SLIDING-WINDOW RATE LIMITS
 // ---------------------------------------------------------------------------
