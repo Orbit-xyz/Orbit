@@ -369,7 +369,18 @@ export async function updateMerchantContract(
  * Fetches merchant profile including custom contract configuration
  */
 export async function fetchMerchantProfile(): Promise<{
-  merchant: { id: string; name: string; wallet_address: string; contract_id?: string };
+  merchant: {
+    id: string;
+    name: string;
+    wallet_address: string;
+    contract_id?: string;
+    tagline?: string | null;
+    support_email?: string | null;
+    website_url?: string | null;
+    logo_url?: string | null;
+    banner_url?: string | null;
+    accent_color?: string | null;
+  };
 }> {
   const url = new URL("/merchant/profile", ORBIT_API_URL);
   const res = await fetch(url.toString(), {
@@ -377,5 +388,21 @@ export async function fetchMerchantProfile(): Promise<{
     headers: merchantRequestHeaders(),
   });
   return handleResponse(res, "Failed to fetch merchant profile");
+}
+
+/**
+ * Saves brand identity, logo, banner and accent color (#350). Empty strings
+ * clear a field. The server returns field-level errors in `fields` on 400.
+ */
+export async function updateMerchantBrandProfile(patch: Record<string, unknown>): Promise<{
+  merchant: { id: string; name: string };
+}> {
+  const url = new URL("/merchant/profile", ORBIT_API_URL);
+  const res = await fetch(url.toString(), {
+    method: "PATCH",
+    headers: merchantRequestHeaders(),
+    body: JSON.stringify(patch),
+  });
+  return handleResponse(res, "Failed to save brand profile");
 }
 

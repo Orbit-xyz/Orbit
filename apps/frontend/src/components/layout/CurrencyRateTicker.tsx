@@ -15,6 +15,12 @@ const CURRENCIES = [
   { id: "eurc", label: "EURC", icon: Landmark },
 ];
 
+const EMPTY_RATE: CurrencyRate = { change24h: 0, change24hPercent: 0 };
+
+function emptyRates(): Record<CurrencyId, CurrencyRate> {
+  return { usdc: { ...EMPTY_RATE }, xlm: { ...EMPTY_RATE }, eurc: { ...EMPTY_RATE } };
+}
+
 export function CurrencyRateTicker() {
   const [rates, setRates] = useState<RateItem[]>(
     CURRENCIES.map((c) => ({ id: c.id, change24h: 0, change24hPercent: 0 }))
@@ -24,15 +30,22 @@ export function CurrencyRateTicker() {
   useEffect(() => {
     async function fetchRates() {
       try {
-        const response = await fetch("/api/currency-rates", {
-          cache: "no-store",
-        });
+        const response = await fetch("/api/currency-rates", { cache: "no-store" });
         if (response.ok) {
           const data = await response.json();
-          setRates(data.rates || CURRENCIES.map((c) => ({ id: c.id, change24h: 0, change24hPercent: 0 })));
+          const next = emptyRates();
+          // Accept either an array of { id, change24h, change24hPercent } or a map keyed by id.
+          const entries: Array<[string, CurrencyRate]> = Array.isArray(data?.rates)
+            ? data.rates.map((r: CurrencyRate & { id: string }) => [r.id, r])
+            : Object.entries(data?.rates ?? {});
+          for (const [id, rate] of entries) {
+            if (id === "usdc" || id === "xlm" || id === "eurc") next[id] = rate;
+          }
+          setRates(next);
         }
-      } catch {
-        setRates(CURRENCIES.map((c) => ({ id: c.id, change24h: 0, change24hPercent: 0 })));
+      } catch (error) {
+        console.error("Failed to fetch currency rates:", error);
+        setRates(emptyRates());
       }
     }
 
@@ -40,6 +53,8 @@ export function CurrencyRateTicker() {
     const interval = setInterval(fetchRates, 60 * 1000);
     return () => clearInterval(interval);
   }, []);
+
+  const formatPercent = (value: number) => `${value >= 0 ? "+" : ""}${value}%`;
 
   return (
     <div className="relative flex items-center gap-2">

@@ -73,6 +73,14 @@ pub enum OrbitContractError {
     MilestoneNotDisputed = 316,
     /// #225: dispute splits do not add up to the remaining balance.
     InvalidDisputeSplit = 317,
+    /// #353: the vault is frozen, either by its subscriber (`pause_vault`) or by
+    /// the merchant (`batch_pause_vaults`). Pulls revert with this code.
+    VaultPaused = 318,
+    /// #363: revenue split basis points do not add up to exactly 10,000.
+    RevenueSplitBpsMismatch = 319,
+    /// #363: revenue split list is empty, too long, has a zero share or a
+    /// duplicate recipient.
+    InvalidRevenueSplit = 320,
 }
 
 /// Sentinel `pull_sequence` for a vault that has never settled a pull.
@@ -94,6 +102,16 @@ pub const REVENUE_ACC_SCALE: i128 = 1_000_000_000_000;
 
 /// Keeps revenue-pool creation and claim lookups within predictable resource bounds.
 pub const MAX_REVENUE_POOL_SHAREHOLDERS: u32 = 100;
+
+/// Upper bound on co-founder revenue split recipients (#363).
+pub const MAX_REVENUE_SPLITS: u32 = 10;
+
+/// Minimum lifetime of a stored revenue split config; each pull extends it (#363).
+pub const REVENUE_SPLIT_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+/// Upper bound on `get_vaults_batch` / `get_merchant_vaults_batch` lookups (#362),
+/// keeping a single simulation's read footprint bounded.
+pub const MAX_BATCH_VAULT_QUERY: u32 = 50;
 
 /// Upper bound on merchant-configured loyalty tiers (#180).
 pub const MAX_LOYALTY_TIERS: u32 = 10;
@@ -290,6 +308,15 @@ pub struct PaymentSplit {
     pub token: Address,
 }
 
+/// One co-founder's share of a merchant's pull revenue (#363), in basis points
+/// of the settled amount. A merchant's shares must sum to exactly 10,000.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevenueSplit {
+    pub recipient: Address,
+    pub bps: u32,
+}
+
 /// Per-subscriber outcome of a `batch_pull_funds` call (#92). `success` is false
 /// when the subscriber was skipped (missing/inactive vault, not yet due, already
 /// settled this cycle, or insufficient funds) without reverting the batch.
@@ -364,6 +391,8 @@ pub enum DataKey {
     NextMilestoneEscrowId,
     /// #225: milestone-based payroll escrow with dispute arbiter.
     MilestoneEscrow(u64),
+    /// #373: dispute bond staked for a milestone escrow.
+    MilestoneDisputeBond(u64),
     /// Id the next Merkle payroll distribution will receive (#156)
     NextMerklePayrollId,
     MerklePayroll(u64),
@@ -674,6 +703,10 @@ pub enum FeatureKey {
     /// #223: escrow hold ids created for a vault, so a post-timelock recovery
     /// can refund every still-pending hold to the subscriber.
     VaultEscrowIds(Address, Address),
+    /// #353: merchant-initiated freeze flag for a (user, merchant) vault, set by
+    /// `batch_pause_vaults`. Separate from the subscriber's `is_paused` so that
+    /// neither party can lift the other's freeze.
+    MerchantFreeze(Address, Address),
 }
 
 // ----------------------------------------------------------------------------
@@ -741,6 +774,14 @@ pub struct MilestoneEscrow {
     pub status: MilestoneEscrowStatus,
 }
 
+/// Bond staked by a claimant when disputing a milestone escrow (#373).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeBondRecord {
+    pub claimant: Address,
+    pub amount: i128,
+}
+
 // ----------------------------------------------------------------------------
 // YIELD-BEARING COLLATERAL STRATEGY (#176)
 // ----------------------------------------------------------------------------
@@ -781,6 +822,8 @@ pub enum SubscriptionKey {
     EscrowPolicy(Address, Address),
     Escrow(u64),
     NextEscrowId,
+    /// #363: co-founder revenue splits for a merchant's pull settlements.
+    RevenueSplits(Address),
 }
 
 #[contracttype]
@@ -983,6 +1026,97 @@ fn pull_payment(
             &vault.amount_per_interval,
         );
     }
+}
+
+/// #363: reject split configs that would not conserve funds exactly.
+fn validate_revenue_splits(env: &Env, splits: &Vec<RevenueSplit>) {
+    if splits.is_empty() || splits.len() > MAX_REVENUE_SPLITS {
+        panic_with_error!(env, OrbitContractError::InvalidRevenueSplit);
+    }
+    let mut total: u64 = 0;
+    for (i, split) in splits.iter().enumerate() {
+        if split.bps == 0 {
+            panic_with_error!(env, OrbitContractError::InvalidRevenueSplit);
+        }
+        for earlier in splits.iter().take(i) {
+            if earlier.recipient == split.recipient {
+                panic_with_error!(env, OrbitContractError::InvalidRevenueSplit);
+            }
+        }
+        total += u64::from(split.bps);
+    }
+    if total != BPS_DENOMINATOR as u64 {
+        panic_with_error!(env, OrbitContractError::RevenueSplitBpsMismatch);
+    }
+}
+
+/// #363: each recipient's share of `amount`, rounded down; the last recipient
+/// takes the rounding remainder so the shares always sum to `amount`.
+fn revenue_split_shares(env: &Env, amount: i128, splits: &Vec<RevenueSplit>) -> Vec<i128> {
+    let mut shares = Vec::new(env);
+    let mut allocated: i128 = 0;
+    let last = splits.len() - 1;
+    for (i, split) in splits.iter().enumerate() {
+        let share = if i as u32 == last {
+            amount - allocated
+        } else {
+            amount
+                .checked_mul(i128::from(split.bps))
+                .expect("Revenue split overflow")
+                / BPS_DENOMINATOR
+        };
+        allocated += share;
+        shares.push_back(share);
+    }
+    shares
+}
+
+/// Settle a pull that is not held in escrow. Without a revenue split config the
+/// merchant receives everything; with one, each co-founder is paid their share
+/// directly in the same invocation (#363).
+fn settle_pull(env: &Env, user: &Address, merchant: &Address, vault: &VaultData) {
+    let splits_key = SubscriptionKey::RevenueSplits(merchant.clone());
+    let splits: Vec<RevenueSplit> = env
+        .storage()
+        .persistent()
+        .get(&splits_key)
+        .unwrap_or_else(|| Vec::new(env));
+    if splits.is_empty() {
+        pull_payment(env, user, merchant, vault, merchant);
+        return;
+    }
+
+    let contract = env.current_contract_address();
+    let token = token::Client::new(env, &vault.token);
+    // A cross-asset vault settles into this contract first; plain vaults move
+    // each share straight from the subscriber's allowance.
+    let via_swap = env
+        .storage()
+        .persistent()
+        .has(&SubscriptionKey::Swap(user.clone(), merchant.clone()));
+    if via_swap {
+        pull_payment(env, user, merchant, vault, &contract);
+    }
+    let shares = revenue_split_shares(env, vault.amount_per_interval, &splits);
+    for (split, share) in splits.iter().zip(shares.iter()) {
+        if share == 0 {
+            continue;
+        }
+        if via_swap {
+            token.transfer(&contract, &split.recipient, &share);
+        } else {
+            token.transfer_from(&contract, user, &split.recipient, &share);
+        }
+        env.events().publish(
+            (
+                Symbol::new(env, "revenue_split_paid"),
+                merchant.clone(),
+                split.recipient.clone(),
+            ),
+            share,
+        );
+    }
+    extend_key(env, &splits_key, vault.interval_seconds);
 }
 
 fn store_escrow(
@@ -1231,6 +1365,81 @@ fn assert_not_paused(env: &Env) {
     }
 }
 
+/// #353: whether the merchant has frozen this (user, merchant) vault.
+fn is_merchant_frozen(env: &Env, user: &Address, merchant: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&FeatureKey::MerchantFreeze(user.clone(), merchant.clone()))
+        .unwrap_or(false)
+}
+
+/// #353: reverts with `VaultPaused` if either the subscriber or the merchant has
+/// frozen the vault. Used by every single-vault pull path.
+fn assert_vault_not_paused(env: &Env, vault: &VaultData, user: &Address, merchant: &Address) {
+    if vault.is_paused || is_merchant_frozen(env, user, merchant) {
+        panic_with_error!(env, OrbitContractError::VaultPaused);
+    }
+}
+
+/// #353: sets or clears the merchant freeze on every listed subscriber vault in
+/// one pass. Atomic: a missing vault reverts the whole batch, so a merchant can
+/// only ever change vaults keyed to its own address (vault keys are
+/// `(user, merchant)`). Returns the number of vaults touched.
+fn apply_merchant_freeze(
+    env: &Env,
+    merchant: &Address,
+    subscribers: &Vec<Address>,
+    frozen: bool,
+) -> u32 {
+    assert!(!subscribers.is_empty(), "subscribers must not be empty");
+    assert!(
+        subscribers.len() <= MAX_BATCH_PULL_SUBSCRIBERS,
+        "batch size exceeds MAX_BATCH_PULL_SUBSCRIBERS"
+    );
+
+    let now = env.ledger().timestamp();
+    let mut touched: u32 = 0;
+    for user in subscribers.iter() {
+        let key = vault_key(&user, merchant);
+        let mut vault = load_vault(env, &key).expect("Vault does not exist");
+        let freeze_key = FeatureKey::MerchantFreeze(user.clone(), merchant.clone());
+
+        if frozen {
+            env.storage().persistent().set(&freeze_key, &true);
+        } else {
+            env.storage().persistent().remove(&freeze_key);
+            // Unfreezing restores pull eligibility. Like `resume_vault`, the
+            // billing clock restarts at unfreeze so the frozen period is not
+            // back-billed. A never-pulled vault (timestamp 0) keeps its immediate
+            // first-pull eligibility. A subscriber-initiated pause still applies.
+            if !vault.is_paused && vault.last_pull_timestamp != 0 {
+                vault.last_pull_timestamp = now;
+                save_vault(env, &key, &vault);
+            }
+        }
+
+        let (threshold, extend_to) = calculate_ttl_params(vault.interval_seconds);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, threshold, extend_to);
+        if frozen {
+            env.storage()
+                .persistent()
+                .extend_ttl(&freeze_key, threshold, extend_to);
+        }
+
+        let event = if frozen {
+            Symbol::new(env, "vault_frozen_by_merchant")
+        } else {
+            Symbol::new(env, "vault_unfrozen_by_merchant")
+        };
+        env.events()
+            .publish((event, user.clone(), merchant.clone()), ());
+        touched += 1;
+    }
+    touched
+}
+
 /// Require the caller to be the configured protocol admin. The first caller
 /// bootstraps the admin slot; every later call must match the stored address.
 fn bootstrap_or_require_admin(env: &Env, caller: &Address) {
@@ -1419,6 +1628,9 @@ fn clear_recovery_state(env: &Env, user: &Address, merchant: &Address) {
 /// emits `vault_cancelled`. Shared by direct and delegated cancellation.
 fn remove_vault(env: &Env, user: &Address, merchant: &Address) {
     let key = vault_key(user, merchant);
+    env.storage()
+        .persistent()
+        .remove(&FeatureKey::MerchantFreeze(user.clone(), merchant.clone()));
     let metered_key = MeteredVaultKey::Vault(user.clone(), merchant.clone());
 
     let has_fixed = env.storage().persistent().has(&key);
@@ -2466,6 +2678,7 @@ impl OrbitContract {
     }
 
     pub fn is_subscriber_active(env: Env, user: Address, merchant: Address) -> bool {
+        let frozen = is_merchant_frozen(&env, &user, &merchant);
         let key = VaultKey {
             user: user.clone(),
             merchant: merchant.clone(),
@@ -2479,6 +2692,7 @@ impl OrbitContract {
             (Some(vault), Some(badge)) => {
                 badge.active
                     && !vault.is_paused
+                    && !frozen
                     && env.ledger().timestamp() < badge.expiration_timestamp
             }
             _ => false,
@@ -2859,6 +3073,52 @@ impl OrbitContract {
         load_vault(&env, &vault_key(&user, &merchant))
     }
 
+    /// Read one subscriber's vaults with several merchants in a single call
+    /// (#362). Entry `i` is the vault for `merchants[i]`, or `None` when it does
+    /// not exist. Read-only: no authorization, no storage writes, no events.
+    pub fn get_vaults_batch(
+        env: Env,
+        user: Address,
+        merchants: Vec<Address>,
+    ) -> Vec<Option<VaultData>> {
+        assert!(
+            merchants.len() <= MAX_BATCH_VAULT_QUERY,
+            "batch size exceeds MAX_BATCH_VAULT_QUERY"
+        );
+        let mut vaults = Vec::new(&env);
+        for merchant in merchants.iter() {
+            let key = VaultKey {
+                user: user.clone(),
+                merchant,
+            };
+            vaults.push_back(load_vault(&env, &key));
+        }
+        vaults
+    }
+
+    /// Read a merchant's vaults with several subscribers in a single call
+    /// (#362). Entry `i` is the vault for `users[i]`, or `None` when it does not
+    /// exist. Read-only: no authorization, no storage writes, no events.
+    pub fn get_merchant_vaults_batch(
+        env: Env,
+        merchant: Address,
+        users: Vec<Address>,
+    ) -> Vec<Option<VaultData>> {
+        assert!(
+            users.len() <= MAX_BATCH_VAULT_QUERY,
+            "batch size exceeds MAX_BATCH_VAULT_QUERY"
+        );
+        let mut vaults = Vec::new(&env);
+        for user in users.iter() {
+            let key = VaultKey {
+                user,
+                merchant: merchant.clone(),
+            };
+            vaults.push_back(load_vault(&env, &key));
+        }
+        vaults
+    }
+
     /// Close a vault so the merchant can no longer pull from it.
     /// Only the user can cancel. A mutually configured early fee is transferred
     /// before the vault is removed; the remaining token allowance is untouched.
@@ -3198,6 +3458,22 @@ impl OrbitContract {
         env.storage().instance().extend_ttl(threshold, extend_to);
     }
 
+    /// #353: merchant freezes many subscriber vaults in one transaction, e.g.
+    /// during an outage or a suspected breach. The merchant authorizes the whole
+    /// batch once. Pulls on a frozen vault revert with `VaultPaused` until
+    /// `batch_unpause_vaults` runs. Returns the number of vaults frozen.
+    pub fn batch_pause_vaults(env: Env, merchant: Address, subscribers: Vec<Address>) -> u32 {
+        merchant.require_auth();
+        apply_merchant_freeze(&env, &merchant, &subscribers, true)
+    }
+
+    /// #353: merchant restores pull eligibility for a batch of subscriber vaults
+    /// once service resumes. Does not lift a subscriber-initiated pause.
+    pub fn batch_unpause_vaults(env: Env, merchant: Address, subscribers: Vec<Address>) -> u32 {
+        merchant.require_auth();
+        apply_merchant_freeze(&env, &merchant, &subscribers, false)
+    }
+
     /// 2. THE PULL (Execute Billing)
     /// The merchant (or the Orbit backend) calls this to pull the funds.
     pub fn pull_funds(env: Env, user: Address, merchant: Address) {
@@ -3208,8 +3484,9 @@ impl OrbitContract {
         let key = vault_key(&user, &merchant);
         let mut vault = load_vault(&env, &key).expect("Vault does not exist");
 
-        // A paused subscriber is never billed (#93)
-        assert!(!vault.is_paused, "Vault is paused by subscriber");
+        // A paused subscriber is never billed (#93); a merchant freeze blocks
+        // pulls the same way (#353).
+        assert_vault_not_paused(&env, &vault, &user, &merchant);
 
         let current_time = env.ledger().timestamp();
 
@@ -3306,12 +3583,18 @@ impl OrbitContract {
 
         let policy_key = SubscriptionKey::EscrowPolicy(user.clone(), merchant.clone());
         let policy: Option<EscrowPolicy> = env.storage().persistent().get(&policy_key);
-        let recipient = if policy.is_some() {
-            env.current_contract_address()
+        if policy.is_some() {
+            pull_payment(
+                &env,
+                &user,
+                &merchant,
+                &vault,
+                &env.current_contract_address(),
+            );
         } else {
-            merchant.clone()
-        };
-        pull_payment(&env, &user, &merchant, &vault, &recipient);
+            // #363: pays the merchant, or its co-founders per the revenue split.
+            settle_pull(&env, &user, &merchant, &vault);
+        }
         if let Some(policy) = policy {
             let pull_id = store_escrow(&env, &user, &merchant, &vault, &policy);
             extend_key(
@@ -3387,6 +3670,44 @@ impl OrbitContract {
     }
 
     // --------------------------------------------------------------------
+    // REVENUE SPLITS (#363)
+    // --------------------------------------------------------------------
+
+    /// Split this merchant's non-escrow pull settlements between co-founders.
+    /// `splits` must hold 1 to `MAX_REVENUE_SPLITS` distinct recipients whose
+    /// basis points sum to exactly 10,000; otherwise the call reverts with
+    /// `RevenueSplitBpsMismatch` or `InvalidRevenueSplit`. Replaces any
+    /// previous config.
+    pub fn set_revenue_splits(env: Env, merchant: Address, splits: Vec<RevenueSplit>) {
+        merchant.require_auth();
+        validate_revenue_splits(&env, &splits);
+        let key = SubscriptionKey::RevenueSplits(merchant.clone());
+        env.storage().persistent().set(&key, &splits);
+        extend_key(&env, &key, REVENUE_SPLIT_TTL_SECONDS);
+        env.events()
+            .publish((Symbol::new(&env, "revenue_splits_set"), merchant), splits);
+    }
+
+    /// Remove the split config so pulls settle 100% to the merchant again.
+    pub fn clear_revenue_splits(env: Env, merchant: Address) {
+        merchant.require_auth();
+        env.storage()
+            .persistent()
+            .remove(&SubscriptionKey::RevenueSplits(merchant.clone()));
+        env.events()
+            .publish((Symbol::new(&env, "revenue_splits_cleared"), merchant), ());
+    }
+
+    /// The merchant's revenue split config; empty when pulls settle to the
+    /// merchant alone.
+    pub fn get_revenue_splits(env: Env, merchant: Address) -> Vec<RevenueSplit> {
+        env.storage()
+            .persistent()
+            .get(&SubscriptionKey::RevenueSplits(merchant))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    // --------------------------------------------------------------------
     // BATCH PULL (#92)
     // --------------------------------------------------------------------
 
@@ -3456,8 +3777,9 @@ impl OrbitContract {
             None => return skipped(0),
         };
 
-        // A paused subscriber is never billed (#93).
-        if vault.is_paused {
+        // A paused subscriber is never billed (#93), and neither is a vault the
+        // merchant has frozen (#353).
+        if vault.is_paused || is_merchant_frozen(env, subscriber, merchant) {
             return skipped(0);
         }
         if vault.payment_status == PAYMENT_DEFAULTED || vault_is_expired(env, &vault) {
@@ -3515,9 +3837,10 @@ impl OrbitContract {
         }
 
         // Routes through the vault's configured swap router when one exists;
-        // otherwise this is a direct token.transfer_from(subscriber -> merchant).
+        // otherwise this is a direct token.transfer_from(subscriber -> merchant),
+        // or one per co-founder when the merchant has revenue splits (#363).
         vault.amount_per_interval = amount;
-        pull_payment(env, subscriber, merchant, &vault, merchant);
+        settle_pull(env, subscriber, merchant, &vault);
 
         vault.amount_per_interval = base_amount;
         let interval_seconds = vault.interval_seconds;
@@ -6027,6 +6350,17 @@ impl OrbitContract {
         bootstrap_or_require_admin(&env, &caller);
     }
 
+    /// #354: swap this contract's WASM for bytecode that is already installed on
+    /// the network. The protocol admin must authorize the call. The deploy
+    /// orchestrator (`scripts/deploy.sh`) uploads the new build first, then calls
+    /// this, so re-running the script upgrades the existing contract in place.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        bootstrap_or_require_admin(&env, &caller);
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.events()
+            .publish((symbol_short!("upgraded"), caller), ());
+    }
+
     /// Halt every fund-moving entrypoint. Guarded by the protocol admin.
     pub fn pause(env: Env, caller: Address) {
         bootstrap_or_require_admin(&env, &caller);
@@ -6265,6 +6599,7 @@ impl OrbitContract {
     }
 
     /// Either escrow party may escalate to the designated arbiter.
+    /// Initiating a dispute requires depositing a dispute bond (5% of remaining escrow amount, min 1).
     pub fn dispute_milestone_escrow(env: Env, caller: Address, escrow_id: u64) {
         caller.require_auth();
         let mut escrow = load_milestone_escrow(&env, escrow_id);
@@ -6277,20 +6612,55 @@ impl OrbitContract {
                 && escrow.status != MilestoneEscrowStatus::SettledMutual,
             "Escrow already finalized"
         );
+        assert!(
+            escrow.status != MilestoneEscrowStatus::Disputed,
+            "Escrow already disputed"
+        );
+
+        let remaining = escrow
+            .total_amount
+            .checked_sub(escrow.released_amount)
+            .expect("Released exceeds total amount");
+
+        // 5% dispute bond requirement (min 1)
+        let bond_amount = (remaining * 5 / 100).max(1);
+
+        // Custody bond from claimant to contract
+        token::Client::new(&env, &escrow.token).transfer(
+            &caller,
+            &env.current_contract_address(),
+            &bond_amount,
+        );
+
+        // Store bond record
+        let bond_key = DataKey::MilestoneDisputeBond(escrow_id);
+        env.storage().persistent().set(
+            &bond_key,
+            &DisputeBondRecord {
+                claimant: caller.clone(),
+                amount: bond_amount,
+            },
+        );
+
         escrow.status = MilestoneEscrowStatus::Disputed;
         save_milestone_escrow(&env, &escrow);
-        env.events()
-            .publish((Symbol::new(&env, "milestone_disputed"), escrow_id), caller);
+        env.events().publish(
+            (Symbol::new(&env, "milestone_disputed"), escrow_id, caller),
+            bond_amount,
+        );
     }
 
     /// Arbiter-only resolution. The two splits must equal the still-escrowed
     /// balance, so no tokens can be created or silently stranded.
-    pub fn resolve_dispute(
+    /// Legitimate disputes (frivolous = false) refund the staked bond to the claimant.
+    /// Frivolous disputes (frivolous = true) forfeit the bond to the counterparty (respondent).
+    pub fn resolve_dispute_with_ruling(
         env: Env,
         arbiter: Address,
         escrow_id: u64,
         employer_split: i128,
         contractor_split: i128,
+        frivolous: bool,
     ) {
         arbiter.require_auth();
         let mut escrow = load_milestone_escrow(&env, escrow_id);
@@ -6315,20 +6685,45 @@ impl OrbitContract {
             panic_with_error!(&env, OrbitContractError::InvalidDisputeSplit);
         }
         let contract = env.current_contract_address();
+        let token_client = token::Client::new(&env, &escrow.token);
+
         if employer_split > 0 {
-            token::Client::new(&env, &escrow.token).transfer(
+            token_client.transfer(
                 &contract,
                 &escrow.employer,
                 &employer_split,
             );
         }
         if contractor_split > 0 {
-            token::Client::new(&env, &escrow.token).transfer(
+            token_client.transfer(
                 &contract,
                 &escrow.contractor,
                 &contractor_split,
             );
         }
+
+        // Adjudicate dispute bond if one was staked (#373)
+        let bond_key = DataKey::MilestoneDisputeBond(escrow_id);
+        if let Some(bond) = env.storage().persistent().get::<_, DisputeBondRecord>(&bond_key) {
+            env.storage().persistent().remove(&bond_key);
+            if frivolous {
+                // Forfeit bond to counterparty (respondent)
+                let respondent = if bond.claimant == escrow.employer {
+                    escrow.contractor.clone()
+                } else {
+                    escrow.employer.clone()
+                };
+                token_client.transfer(&contract, &respondent, &bond.amount);
+            } else {
+                // Legitimate dispute: refund bond to claimant
+                token_client.transfer(&contract, &bond.claimant, &bond.amount);
+            }
+            env.events().publish(
+                (Symbol::new(&env, "dispute_bond_settled"), escrow_id, bond.claimant),
+                (bond.amount, frivolous),
+            );
+        }
+
         escrow.released_amount = escrow.total_amount;
         escrow.status = MilestoneEscrowStatus::Refunded;
         save_milestone_escrow(&env, &escrow);
@@ -6338,11 +6733,10 @@ impl OrbitContract {
         );
     }
 
-    /// Mutual dual-signature release bypassing arbiter intervention (#346).
-    /// Both employer and contractor must authorize.
-    /// Balances must be conserved: employer_split + contractor_split == total deposited escrow balance remaining.
-    pub fn mutual_escrow_settlement(
+    /// Preserves existing signature for resolve_dispute defaulting to legitimate resolution.
+    pub fn resolve_dispute(
         env: Env,
+        arbiter: Address,
         escrow_id: u64,
         employer_split: i128,
         contractor_split: i128,
@@ -6392,6 +6786,21 @@ impl OrbitContract {
             (Symbol::new(&env, "mutual_escrow_settled"), escrow_id),
             (employer_split, contractor_split),
         );
+    }
+
+        Self::resolve_dispute_with_ruling(
+            env,
+            arbiter,
+            escrow_id,
+            employer_split,
+            contractor_split,
+            false,
+        );
+    }
+
+    pub fn get_milestone_dispute_bond(env: Env, escrow_id: u64) -> Option<DisputeBondRecord> {
+        let bond_key = DataKey::MilestoneDisputeBond(escrow_id);
+        env.storage().persistent().get(&bond_key)
     }
 
     pub fn get_milestone_escrow(env: Env, escrow_id: u64) -> Option<MilestoneEscrow> {
@@ -6881,3 +7290,16 @@ mod test_fuzz;
 
 #[cfg(test)]
 mod test_storage;
+
+#[cfg(test)]
+mod test_batch_pause;
+
+#[cfg(test)]
+mod test_upgrade;
+
+#[cfg(test)]
+mod test_revenue_splits_batch;
+mod test_issues_223_226;
+
+#[cfg(test)]
+mod test_batch_cancel;

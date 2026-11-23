@@ -60,6 +60,24 @@ const recordWebhookDelivery = (outcome) => {
     if (WEBHOOK_OUTCOMES.has(outcome)) webhookDeliveryTotal.inc({ outcome });
 };
 
+// SSL Certificate validity and expiration monitor gauges (#374)
+const webhookSslValidGauge = new client.Gauge({
+    name: 'webhook_ssl_valid_count',
+    help: 'Number of merchant webhook endpoints with valid, unexpired SSL certificates',
+    registers: [businessRegistry],
+});
+
+const webhookSslExpiringSoonGauge = new client.Gauge({
+    name: 'webhook_ssl_expiring_soon_count',
+    help: 'Number of merchant webhook endpoints with SSL certificates expiring soon or invalid',
+    registers: [businessRegistry],
+});
+
+const recordWebhookSslStatus = ({ validCount, expiringSoonCount }) => {
+    if (typeof validCount === 'number') webhookSslValidGauge.set(validCount);
+    if (typeof expiringSoonCount === 'number') webhookSslExpiringSoonGauge.set(expiringSoonCount);
+};
+
 // /metrics is internal: it requires METRICS_TOKEN as a bearer token (or X-Metrics-Token).
 // Without a configured token the endpoint is closed rather than public.
 const metricsAuth = (getToken = () => process.env.METRICS_TOKEN) => (req, res, next) => {
@@ -120,5 +138,8 @@ module.exports = {
     metricsAuth,
     recordPullOutcome,
     recordWebhookDelivery,
+    recordWebhookSslStatus,
+    webhookSslValidGauge,
+    webhookSslExpiringSoonGauge,
     setDbPoolSource,
 };

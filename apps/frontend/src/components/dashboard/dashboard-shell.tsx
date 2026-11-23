@@ -32,6 +32,7 @@ import {
   Mail,
   FileSpreadsheet,
   Droplets,
+  Palette,
 } from "lucide-react";
 import { useDashboardTheme, type ThemePreference } from "@/lib/dashboard-theme";
 import { useFiatRates, type FiatCurrency } from "@/lib/fiat-rates";
@@ -52,6 +53,7 @@ import { RetentionView } from "./views/retention-view";
 import { NotificationTemplatesView } from "./views/notification-templates-view";
 import { TeamView } from "./views/team-view";
 import { TaxComplianceView } from "./views/tax-compliance-view";
+import { BrandSettingsView } from "./views/brand-settings-view";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
 import { VaultModal } from "./modals/vault-modal";
 import { DeployVaultModal } from "./modals/deploy-vault-modal";
@@ -59,6 +61,7 @@ import { CreatePlanModal } from "./modals/create-plan-modal";
 import { CommandPalette } from "./modals/command-palette";
 import { ReportsTaxWizardModal } from "./modals/reports-tax-wizard-modal";
 import { NotificationDrawer } from "./drawers/notification-drawer";
+import { WalletPopover } from "@/components/layout/wallet-popover";
 import { NotificationToasts } from "./notification-toasts";
 import { DOCS_URL } from "@/lib/links";
 
@@ -362,6 +365,12 @@ export function DashboardShell() {
       icon: Code2,
       badge: t("badges.api"),
     },
+    {
+      id: "brand" as DashboardTab,
+      label: "Brand & checkout",
+      icon: Palette,
+      badge: null,
+    },
   ];
 
   return (
@@ -601,6 +610,7 @@ export function DashboardShell() {
           </div>
 
           <div className="flex items-center gap-3">
+            <WalletPopover />
             {/* Quick Search / Command Palette Trigger (#308) */}
             <button
               onClick={() => setIsCommandPaletteOpen(true)}
@@ -738,6 +748,7 @@ export function DashboardShell() {
           {activeTab === "tax" && <TaxComplianceView />}
 
           {activeTab === "developers" && <DevelopersView />}
+          {activeTab === "brand" && <BrandSettingsView />}
         </main>
       </div>
 

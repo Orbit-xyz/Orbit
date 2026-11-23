@@ -91,6 +91,8 @@ const { registerRpcProxyRoute, createIpWindowLimiter: createRpcIpWindowLimiter }
 const { SimulationCache, getOrSimulate } = require('./simulation-cache');
 const { registerHealthMetrics, recordPullOutcome, setDbPoolSource } = require('./health-metrics');
 const { registerStorageHealthRoutes } = require('./storage-health');
+const { createRpcLagMonitor, registerRpcLagHealthRoute } = require('./rpc-lag-monitor');
+const { captureSignedRawBody, requireRequestSignature } = require('./request-signature');
 const { createDisputeAlertProcessor } = require('./dispute-alert-processor');
 const { captureStripeRawBody, registerStripeBillingRoutes } = require('./stripe-billing');
 const { registerExternalReconciliationRoutes } = require('./external-reconciliation');
@@ -162,7 +164,13 @@ app.locals.reputation = reputation;
 
 app.use(ipRateLimit);
 // Keeps the raw bytes of Stripe webhooks, which are signed over the exact body (#131)
-app.use(express.json({ verify: captureStripeRawBody }));
+// Signed merchant requests keep their raw body too (#364)
+app.use(express.json({
+    verify: (req, res, buf) => {
+        captureStripeRawBody(req, res, buf);
+        captureSignedRawBody(req, res, buf);
+    },
+}));
 
 // Multi-region database manager with read-replica failover (#139)
 const dbManager = getDatabaseManager();
@@ -186,6 +194,11 @@ const getExchangeRateWorker = () => {
 
 // Merchant routes: authenticate the API key, then apply its rate limit
 const authenticateMerchant = [requireApiKey(getSupabase), reputation.markAuthenticated, apiKeyRateLimit];
+// Request signatures on state-changing merchant routes (#364). Signed requests are
+// always verified; REQUIRE_REQUEST_SIGNATURES=true also rejects unsigned ones.
+const verifyRequestSignature = requireRequestSignature({
+    isRequired: () => app.locals.requireRequestSignatures ?? process.env.REQUIRE_REQUEST_SIGNATURES === 'true',
+});
 registerAnalyticsRoutes(app, getSupabase);
 registerPaymentLinkRoutes(app, getSupabase, authenticateMerchant);
 // Testnet Friendbot + USDC trustline bootstrap for local development (#232);
@@ -416,7 +429,7 @@ const MERCHANT_MISMATCH_ERROR = { error: "merchant_id does not match the authent
 // ==========================================
 // ROUTE 1: POST /plans (Create a new pricing plan)
 // ==========================================
-app.post('/plans', authenticateMerchant, async (req, res) => {
+app.post('/plans', authenticateMerchant, verifyRequestSignature, async (req, res) => {
     const parseResult = parseCreatePlanBody(req.body);
     if (!parseResult.success) {
         return res.status(400).json({ error: formatZodError(parseResult.error) });
@@ -821,7 +834,7 @@ const applyPullOutcome = async ({
     };
 };
 
-app.post('/trigger-pull', authenticateMerchant, async (req, res) => {
+app.post('/trigger-pull', authenticateMerchant, verifyRequestSignature, async (req, res) => {
     const parseResult = triggerPullSchema.safeParse(req.body);
     if (!parseResult.success) {
         return res.status(400).json({ error: formatZodError(parseResult.error) });
@@ -946,7 +959,7 @@ app.post('/trigger-pull', authenticateMerchant, async (req, res) => {
 });
 
 // Accept only a wallet-signed envelope, verify the merchant signature, then submit it.
-app.post('/submit-pull', authenticateMerchant, async (req, res) => {
+app.post('/submit-pull', authenticateMerchant, verifyRequestSignature, async (req, res) => {
     const parseResult = submitPullSchema.safeParse(req.body);
     if (!parseResult.success) return res.status(400).json({ error: formatZodError(parseResult.error) });
 
@@ -2300,6 +2313,21 @@ registerPriceIndexationRoutes(app, getSupabase, authenticateMerchant);
 registerSnapshotRoutes(app, getSupabase, authenticateMerchant, getSorobanServer);
 registerHealthMetrics(app, { getSupabase, getSorobanServer, rpcUrl: process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org' });
 registerStorageHealthRoutes(app);
+// Soroban RPC sync lag (#365): GET /health and orbit_rpc_lag_ledgers. Tests inject
+// their own monitor through app.locals.rpcLagMonitor.
+let defaultRpcLagMonitor;
+const getRpcLagMonitor = () => {
+    if (app.locals.rpcLagMonitor) return app.locals.rpcLagMonitor;
+    defaultRpcLagMonitor ??= createRpcLagMonitor({
+        getSorobanServer,
+        rpcUrl: process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org',
+        horizonUrl: process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org',
+        getFetch: () => app.locals.fetchImpl || globalThis.fetch,
+        intervalMs: Number(process.env.RPC_LAG_POLL_INTERVAL_MS) || undefined,
+    });
+    return defaultRpcLagMonitor;
+};
+registerRpcLagHealthRoute(app, getRpcLagMonitor);
 app.locals.disputeAlertProcessor = createDisputeAlertProcessor({
     supabase: getSupabase(),
     frontendUrl: process.env.FRONTEND_URL || 'https://useorbit.xyz',
@@ -2323,6 +2351,9 @@ registerHandoverRoutes(app, getSupabase, {
 app.locals.paymentEventBus = createSubscriptionEventBus();
 app.locals.graphqlServer = registerGraphql(app, getSupabase, authenticateMerchant);
 
+const { validateBrandPatch, BRAND_FIELDS } = require('./brand-profile'); // #350
+const BRAND_SELECT = BRAND_FIELDS.join(', ');
+
 // Merchant profile & custom contract persistence (#143)
 app.get('/merchant/profile', authenticateMerchant, async (req, res) => {
     try {
@@ -2330,7 +2361,7 @@ app.get('/merchant/profile', authenticateMerchant, async (req, res) => {
         if (!supabase) return res.status(500).json({ error: "Database client not initialized" });
         const { data, error } = await supabase
             .from('merchants')
-            .select('id, name, wallet_address, contract_id, created_at')
+            .select('id, name, wallet_address, contract_id, created_at, ' + BRAND_SELECT)
             .eq('id', req.merchant.id)
             .single();
         if (error) throw error;
@@ -2354,11 +2385,17 @@ app.patch('/merchant/profile', authenticateMerchant, async (req, res) => {
         if (typeof req.body?.contract_id === 'string' && req.body.contract_id.trim()) {
             updates.contract_id = req.body.contract_id.trim();
         }
+        // #350: brand identity, logo, banner and accent color
+        const brand = validateBrandPatch(req.body);
+        if (!brand.ok) {
+            return res.status(400).json({ error: 'Invalid brand profile', fields: brand.errors });
+        }
+        Object.assign(updates, brand.patch);
         const { data, error } = await supabase
             .from('merchants')
             .update(updates)
             .eq('id', req.merchant.id)
-            .select('id, name, wallet_address, contract_id, created_at')
+            .select('id, name, wallet_address, contract_id, created_at, ' + BRAND_SELECT)
             .single();
         if (error) throw error;
         res.status(200).json({ merchant: data });
@@ -2489,6 +2526,7 @@ function startServer() {
     // static baselines rather than failing startup.
     app.locals.exchangeRateWorker = getExchangeRateWorker();
     app.locals.exchangeRateWorker.start();
+    getRpcLagMonitor().start();
 
     const usageInterval = setInterval(() => {
         const buffer = getUsageBuffer(), supabase = getSupabase();
@@ -2507,6 +2545,7 @@ function startServer() {
         shuttingDown = true;
         app.locals.exchangeRateWorker?.stop();
         app.locals.oracleWorker?.stop?.();
+        getRpcLagMonitor().stop();
         httpServer.close(() => process.exit(0));
     };
     process.once('SIGTERM', shutdown);
