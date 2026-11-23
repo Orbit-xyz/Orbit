@@ -37,6 +37,8 @@ export interface OrbitCheckoutProps {
   orbitContractId?: string;
   tokenContractId?: string;
   rpcUrl?: string;
+  backupRpcUrl?: string;
+  setupFee?: number;
   networkPassphrase?: string;
   theme?: OrbitTheme | OrbitBrandTheme;
   accentColor?: string;
