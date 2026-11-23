@@ -67,6 +67,8 @@ Copy `apps/backend/.env.example` to `apps/backend/.env` and configure:
 | `SPLIT_TOKEN_CONTRACT_ID` | Stellar Asset Contract used for split payouts; falls back to `USDC_CONTRACT_ID` | `C...` |
 | `PRICE_INDEXATION_INTERVAL_MS` | Delay between price indexation worker runs (defaults to 900000 = 15 min) | `900000` |
 | `METRICS_TOKEN` | Bearer token required by `GET /metrics`; when unset the endpoint answers 403 | `a-long-random-token` |
+| `RPC_LAG_POLL_INTERVAL_MS` | How often the RPC sync monitor compares the Soroban RPC ledger with Horizon (defaults to 10000) | `10000` |
+| `REQUIRE_REQUEST_SIGNATURES` | When `true`, `POST /plans`, `/trigger-pull` and `/submit-pull` reject requests without `X-Orbit-Request-Signature` | `true` |
 | `WEBHOOK_MAX_ATTEMPTS` | Delivery attempts before a webhook goes to the dead-letter queue (defaults to 5) | `5` |
 | `WEBHOOK_RETRY_BASE_MS` / `WEBHOOK_RETRY_MAX_MS` | Base and maximum retry backoff; delays double per attempt with jitter (defaults to 30000 / 1800000) | `30000` |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token used for configured webhook-failure alert channels | `123456:bot-token` |
@@ -135,6 +137,7 @@ submitting a replacement. Transient failures retry after 1, 5, and 15 minutes.
 | `GET` | `/webhooks/dead-letters` | Merchant | Webhook deliveries that failed every retry (`merchant_id` query) |
 | `POST` | `/webhooks/dead-letters/:id/replay` | Merchant | Re-send a dead-lettered delivery once (`merchant_id` body) |
 | `GET` | `/metrics` | `METRICS_TOKEN` | Prometheus metrics |
+| `GET` | `/health` | Public | Soroban RPC sync status and `rpc_lag_ledgers`; 503 when the RPC is critically behind |
 | `POST` | `/api/dev/fund` | Dev only | Fund a testnet account via Friendbot and add the USDC trustline; not registered when `NODE_ENV=production` |
 
 ---
@@ -179,6 +182,26 @@ curl -X DELETE http://localhost:3001/api-keys/<key id> -H "Authorization: Bearer
 ```
 
 `POST /api-keys` deliberately does not support `Idempotency-Key`, since replaying the response would require persisting the secret.
+
+### Request signatures
+
+`POST /plans`, `POST /trigger-pull` and `POST /submit-pull` accept a signature over the request so a tampered or replayed request is rejected before it reaches any business logic. Sign with HMAC-SHA256, keyed with the API key you send as the Bearer token:
+
+```
+X-Orbit-Timestamp: <unix seconds>
+X-Orbit-Request-Signature: hex(HMAC_SHA256(api_key, "<timestamp>.<METHOD>.<path>.<body>"))
+```
+
+`<path>` excludes the query string and `<body>` is the exact JSON bytes sent (empty for requests without a body). The signature may be prefixed with `sha256=`.
+
+```js
+const crypto = require('crypto');
+const body = JSON.stringify({ name: 'Pro', usdc_amount: 290000000, interval_seconds: 2592000 });
+const timestamp = Math.floor(Date.now() / 1000);
+const signature = crypto.createHmac('sha256', apiKey).update(`${timestamp}.POST./plans.${body}`).digest('hex');
+```
+
+Timestamps more than 5 minutes from server time, a mismatched signature, or only one of the two headers get `401 { "code": "INVALID_REQUEST_SIGNATURE" }`. Signed requests are always verified; unsigned requests are still accepted unless `REQUIRE_REQUEST_SIGNATURES=true`.
 
 ### Rate limiting
 
@@ -1075,6 +1098,18 @@ Merchants can manage incident destinations with `GET`, `POST`, and `DELETE /webh
 | `orbit_pull_total` | counter | `status` = `success`, `failed`, `timeout` | Pull outcomes; `timeout` means still unconfirmed when polling stopped |
 | `orbit_webhook_delivery_total` | counter | `outcome` = `success`, `failed`, `dead_lettered` | Delivery attempts, and transfers to the dead-letter queue |
 | `orbit_db_pool_active` | gauge | | Connections checked out of the backend's Postgres pools |
+| `orbit_rpc_lag_ledgers` | gauge | | Ledgers the Soroban RPC is behind the consensus ledger reported by Horizon |
+
+### Soroban RPC sync monitor
+
+A background poller (every `RPC_LAG_POLL_INTERVAL_MS`, 10s by default) asks the Soroban RPC and Horizon (`HORIZON_URL`) for their latest ledger and records `consensus_ledger - rpc_ledger`. Polls never overlap and each request times out after 5 seconds, so a slow provider cannot back up the event loop. `GET /health` reports the result:
+
+| `status` | Lag | HTTP |
+|---|---|---|
+| `OK` | 3 ledgers or fewer | 200 |
+| `DEGRADED` | more than 3 (~15s); a warning is logged | 200 |
+| `CRITICAL` | more than 10 | 503 |
+| `UNKNOWN` | not measured yet, or a provider failed (see `error`) | 200 |
 
 ## Testnet Dev Funding
 
